@@ -1,0 +1,58 @@
+#
+# Copyright (c) 2026 Talon Contributors
+# Author: dark.lijin@gmail.com
+# Licensed under the Talon Community Dual License Agreement.
+# See the LICENSE file in the project root for full license information.
+#
+[package]
+name = "talon"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Multi-model data engine: SQL + KV + TimeSeries + MessageQueue + Vector + GEO + FTS + Graph in a single binary"
+license = "MIT"
+repository = "https://github.com/superclaw/talon"
+readme = "README.md"
+keywords = ["database", "embedded", "vector", "ai", "kv"]
+categories = ["database-implementations", "data-structures"]
+
+[dependencies]
+# 存储层：LSM-Tree，锁定 3.x（见 docs/07 最终讨论）
+fjall = "3.0"
+# 序列化与常用工具（按需后续补充）
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+serde_json = "1"
+lz4_flex = "0.11"
+regex = "1"
+
+
+
+# TUI 终端界面
+ratatui = "0.28"
+crossterm = "0.28"
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[lib]
+name = "talon"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "talon"
+path = "src/main.rs"
+
+[[bin]]
+name = "talon-cli"
+path = "src/cli.rs"
+
+[[bin]]
+name = "talon-tui"
+path = "src/tui.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1

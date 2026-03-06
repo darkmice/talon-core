@@ -1,0 +1,57 @@
+# ===========================
+# OS
+# ===========================
+.DS_Store
+Thumbs.db
+
+# ===========================
+# IDE / Editor
+# ===========================
+.idea/
+.vscode/
+
+# ===========================
+# Rust
+# ===========================
+target/
+
+# ===========================
+# Node.js / pnpm
+# ===========================
+node_modules/
+*.tsbuildinfo
+
+# ===========================
+# GUI (Vite + Tauri)
+# ===========================
+gui/dist/
+gui/src-tauri/target/
+
+# ===========================
+# Docs (VitePress)
+# ===========================
+packages/docs/.vitepress/dist/
+packages/docs/.vitepress/cache/
+
+# ===========================
+# AI Agents / IDEs
+# ===========================
+.agents
+.cursor
+.ida
+.kiro
+.windsurf
+.docs
+
+# ===========================
+# Internal docs (requirements / design / competitive analysis)
+# ===========================
+docs/
+
+# ===========================
+# Runtime data
+# ===========================
+talon_data/
+talon.lic
+.talon_clock
+packages/website

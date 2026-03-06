@@ -1,0 +1,595 @@
+#
+# Copyright (c) 2026 Talon Contributors
+# Author: dark.lijin@gmail.com
+# Licensed under the Talon Community Dual License Agreement.
+# See the LICENSE file in the project root for full license information.
+#
+# ═══════════════════════════════════════════════════════════════════
+# Talon GitLab CI/CD
+# ═══════════════════════════════════════════════════════════════════
+#
+# 对应 GitHub Actions:
+#   release.yml     → release job
+#   publish-bin.yml → build-* + publish-bin + update-sdk jobs
+#   publish-sdk.yml → publish-python / publish-nodejs / publish-nuget / publish-java jobs
+#   docs.yml        → publish-docs job
+#
+# 触发规则:
+#   - 推送 v* tag → 触发 build + release + publish 全流程
+#   - 推送到 main（docs 变更）→ 触发文档发布
+#   - 手动触发 → 支持跳过指定阶段
+#
+# 所需 CI/CD Variables（在 Settings → CI/CD → Variables 中配置）:
+#   TALON_BIN_TOKEN    — GitHub PAT（推送到 talon-bin / talon-sdk 仓库）
+#   PYPI_API_TOKEN     — PyPI 发布 token
+#   NPM_TOKEN          — npm 发布 token
+#   NUGET_API_KEY      — NuGet 发布 key
+#   OSSRH_USERNAME     — Maven Central 用户名
+#   OSSRH_PASSWORD     — Maven Central 密码
+#   MAVEN_GPG_KEY      — GPG 私钥（Base64 编码）
+#   MAVEN_GPG_PASSPHRASE — GPG 密码
+# ═══════════════════════════════════════════════════════════════════
+
+stages:
+  - build
+  - release
+  - publish-bin
+  - update-sdk
+  - publish-sdk
+  - docs
+
+variables:
+  CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+  RUSTUP_HOME: "${CI_PROJECT_DIR}/.rustup"
+
+# ── 缓存配置 ─────────────────────────────────────────────────────
+.rust_cache: &rust_cache
+  cache:
+    key: "${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cargo/registry/
+      - .cargo/git/
+      - target/
+
+# ═══════════════════════════════════════════════════════════════════
+# Stage 1: Build（对应 release.yml + publish-bin.yml 的 build matrix）
+# ═══════════════════════════════════════════════════════════════════
+
+.build_template: &build_template
+  stage: build
+  <<: *rust_cache
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  before_script:
+    - rustup default stable
+    - rustup target add ${TARGET}
+  script:
+    - |
+      if [ "${USE_CROSS:-false}" = "true" ]; then
+        cargo install cross --git https://github.com/cross-rs/cross
+        cross build --release --target ${TARGET}
+      else
+        cargo build --release --target ${TARGET}
+      fi
+    # Package binaries
+    - mkdir -p dist
+    - cp target/${TARGET}/release/talon dist/${NAME} 2>/dev/null || true
+    - cp target/${TARGET}/release/talon-cli dist/${NAME}-cli 2>/dev/null || true
+    - cp target/${TARGET}/release/talon-tui dist/${NAME}-tui 2>/dev/null || true
+    - cd dist && tar czf ${NAME}.tar.gz ${NAME}* && cd ..
+    # Package libraries
+    - mkdir -p dist-lib
+    - cp target/${TARGET}/release/${LIB_PREFIX}talon.${LIB_EXT} dist-lib/ 2>/dev/null || true
+    - cp target/${TARGET}/release/${LIB_PREFIX}talon.${DYLIB_EXT} dist-lib/ 2>/dev/null || true
+    - cp include/talon.h dist-lib/ 2>/dev/null || true
+    - cd dist-lib && tar czf libtalon-${NAME}.tar.gz * && cd ..
+  artifacts:
+    paths:
+      - dist/${NAME}.tar.gz
+      - dist-lib/libtalon-${NAME}.tar.gz
+    expire_in: 7 days
+
+# ── Linux x86_64 ──
+build-linux-amd64:
+  <<: *build_template
+  image: rust:latest
+  variables:
+    TARGET: x86_64-unknown-linux-gnu
+    NAME: talon-linux-amd64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: so
+
+# ── Linux aarch64 ──
+build-linux-arm64:
+  <<: *build_template
+  image: rust:latest
+  variables:
+    TARGET: aarch64-unknown-linux-gnu
+    NAME: talon-linux-arm64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: so
+  before_script:
+    - apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+    - rustup default stable
+    - rustup target add ${TARGET}
+    - export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+
+# ── macOS x86_64 ──
+build-macos-amd64:
+  <<: *build_template
+  tags: [macos, amd64]
+  variables:
+    TARGET: x86_64-apple-darwin
+    NAME: talon-macos-amd64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: dylib
+
+# ── macOS aarch64 (Apple Silicon) ──
+build-macos-arm64:
+  <<: *build_template
+  tags: [macos, arm64]
+  variables:
+    TARGET: aarch64-apple-darwin
+    NAME: talon-macos-arm64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: dylib
+
+# ── Windows x86_64 ──
+build-windows-amd64:
+  <<: *build_template
+  tags: [windows, amd64]
+  variables:
+    TARGET: x86_64-pc-windows-msvc
+    NAME: talon-windows-amd64
+    LIB_PREFIX: ""
+    LIB_EXT: lib
+    DYLIB_EXT: dll
+  script:
+    - cargo build --release --target %TARGET%
+    - mkdir dist
+    - copy target\%TARGET%\release\talon.exe dist\%NAME%.exe 2>nul || true
+    - copy target\%TARGET%\release\talon-cli.exe dist\%NAME%-cli.exe 2>nul || true
+    - copy target\%TARGET%\release\talon-tui.exe dist\%NAME%-tui.exe 2>nul || true
+    - cd dist && tar czf %NAME%.tar.gz %NAME%* && cd ..
+    - mkdir dist-lib
+    - copy target\%TARGET%\release\talon.lib dist-lib\ 2>nul || true
+    - copy target\%TARGET%\release\talon.dll dist-lib\ 2>nul || true
+    - copy include\talon.h dist-lib\ 2>nul || true
+    - cd dist-lib && tar czf libtalon-%NAME%.tar.gz * && cd ..
+
+# ── Windows aarch64 ──
+build-windows-arm64:
+  <<: *build_template
+  tags: [windows, amd64]  # 交叉编译 ARM64
+  variables:
+    TARGET: aarch64-pc-windows-msvc
+    NAME: talon-windows-arm64
+    LIB_PREFIX: ""
+    LIB_EXT: lib
+    DYLIB_EXT: dll
+  script:
+    - rustup target add aarch64-pc-windows-msvc
+    - cargo build --release --target %TARGET%
+    - mkdir dist
+    - copy target\%TARGET%\release\talon.exe dist\%NAME%.exe 2>nul || true
+    - copy target\%TARGET%\release\talon-cli.exe dist\%NAME%-cli.exe 2>nul || true
+    - copy target\%TARGET%\release\talon-tui.exe dist\%NAME%-tui.exe 2>nul || true
+    - cd dist && tar czf %NAME%.tar.gz %NAME%* && cd ..
+    - mkdir dist-lib
+    - copy target\%TARGET%\release\talon.lib dist-lib\ 2>nul || true
+    - copy target\%TARGET%\release\talon.dll dist-lib\ 2>nul || true
+    - copy include\talon.h dist-lib\ 2>nul || true
+    - cd dist-lib && tar czf libtalon-%NAME%.tar.gz * && cd ..
+
+# ── Linux loongarch64 (龙芯) ──
+build-linux-loongarch64:
+  <<: *build_template
+  image: rust:latest
+  variables:
+    TARGET: loongarch64-unknown-linux-gnu
+    NAME: talon-linux-loongarch64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: so
+    USE_CROSS: "true"
+
+# ── Linux riscv64 ──
+build-linux-riscv64:
+  <<: *build_template
+  image: rust:latest
+  variables:
+    TARGET: riscv64gc-unknown-linux-gnu
+    NAME: talon-linux-riscv64
+    LIB_PREFIX: lib
+    LIB_EXT: a
+    DYLIB_EXT: so
+    USE_CROSS: "true"
+
+# ═══════════════════════════════════════════════════════════════════
+# Stage 2: Release — 创建 GitLab Release 并上传产物
+# ═══════════════════════════════════════════════════════════════════
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  needs:
+    - build-linux-amd64
+    - build-linux-arm64
+    - build-macos-amd64
+    - build-macos-arm64
+    - build-windows-amd64
+    - build-windows-arm64
+    - build-linux-loongarch64
+    - build-linux-riscv64
+  before_script:
+    - mkdir -p release
+    - find dist* -name '*.tar.gz' -exec cp {} release/ \; 2>/dev/null || true
+    # 从各 build job 的 artifacts 中收集（GitLab 自动恢复 needs 的 artifacts）
+    - |
+      cd release
+      sha256sum *.tar.gz > SHA256SUMS.txt 2>/dev/null || true
+      cat SHA256SUMS.txt
+      ls -lh
+  script:
+    - echo "Creating release ${CI_COMMIT_TAG}"
+  release:
+    tag_name: ${CI_COMMIT_TAG}
+    name: "Talon ${CI_COMMIT_TAG}"
+    description: |
+      ## Talon ${CI_COMMIT_TAG}
+
+      AI-native multi-model data engine: SQL + KV + TimeSeries + MessageQueue + Vector in a single binary.
+
+      ### Downloads
+
+      | Platform | Architecture | Binary | Library |
+      |----------|-------------|--------|---------|
+      | Linux | x86_64 | `talon-linux-amd64.tar.gz` | `libtalon-talon-linux-amd64.tar.gz` |
+      | Linux | aarch64 | `talon-linux-arm64.tar.gz` | `libtalon-talon-linux-arm64.tar.gz` |
+      | macOS | x86_64 | `talon-macos-amd64.tar.gz` | `libtalon-talon-macos-amd64.tar.gz` |
+      | macOS | Apple Silicon | `talon-macos-arm64.tar.gz` | `libtalon-talon-macos-arm64.tar.gz` |
+      | Windows | x86_64 | `talon-windows-amd64.tar.gz` | `libtalon-talon-windows-amd64.tar.gz` |
+      | Windows | ARM64 | `talon-windows-arm64.tar.gz` | `libtalon-talon-windows-arm64.tar.gz` |
+      | Linux | 龙芯 loongarch64 | `talon-linux-loongarch64.tar.gz` | `libtalon-talon-linux-loongarch64.tar.gz` |
+      | Linux | riscv64 | `talon-linux-riscv64.tar.gz` | `libtalon-talon-linux-riscv64.tar.gz` |
+    assets:
+      links:
+        - name: "SHA256 Checksums"
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/release/SHA256SUMS.txt"
+
+# ═══════════════════════════════════════════════════════════════════
+# Stage 3: Publish Binaries to talon-bin repo (GitHub)
+# ═══════════════════════════════════════════════════════════════════
+
+publish-bin:
+  stage: publish-bin
+  image: ubuntu:latest
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  needs:
+    - build-linux-amd64
+    - build-linux-arm64
+    - build-macos-amd64
+    - build-macos-arm64
+    - build-windows-amd64
+    - build-windows-arm64
+    - build-linux-loongarch64
+    - build-linux-riscv64
+  before_script:
+    - apt-get update && apt-get install -y curl jq git
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      echo "Publishing binaries for ${TAG} to GitHub talon-bin..."
+
+      # 收集所有 artifacts
+      mkdir -p release
+      find . -name '*.tar.gz' -exec cp {} release/ \; 2>/dev/null || true
+      cd release && sha256sum *.tar.gz > SHA256SUMS.txt && cd ..
+
+      # 通过 GitHub API 创建 Release
+      RELEASE_DATA=$(cat <<EOF
+      {
+        "tag_name": "${TAG}",
+        "name": "Talon ${TAG}",
+        "body": "Automated release from GitLab CI.\n\nSee full changelog at the source repository.",
+        "draft": false,
+        "prerelease": false
+      }
+      EOF
+      )
+
+      RESPONSE=$(curl -s -X POST \
+        -H "Authorization: token ${TALON_BIN_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${RELEASE_DATA}" \
+        "https://api.github.com/repos/darkmice/talon-bin/releases" || true)
+
+      RELEASE_ID=$(echo "${RESPONSE}" | jq -r '.id // empty')
+
+      if [ -z "${RELEASE_ID}" ]; then
+        # Release 可能已存在，尝试获取
+        RELEASE_ID=$(curl -s \
+          -H "Authorization: token ${TALON_BIN_TOKEN}" \
+          "https://api.github.com/repos/darkmice/talon-bin/releases/tags/${TAG}" \
+          | jq -r '.id // empty')
+      fi
+
+      if [ -n "${RELEASE_ID}" ]; then
+        echo "Release ID: ${RELEASE_ID}"
+        # 上传 artifacts
+        for FILE in release/*; do
+          FILENAME=$(basename "${FILE}")
+          echo "Uploading ${FILENAME}..."
+          curl -s -X POST \
+            -H "Authorization: token ${TALON_BIN_TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"${FILE}" \
+            "https://uploads.github.com/repos/darkmice/talon-bin/releases/${RELEASE_ID}/assets?name=${FILENAME}" \
+            > /dev/null
+          echo "✓ ${FILENAME}"
+        done
+      else
+        echo "WARNING: Could not create or find release for ${TAG}"
+        echo "Response: ${RESPONSE}"
+      fi
+
+# ═══════════════════════════════════════════════════════════════════
+# Stage 4: Update SDK — 推送预编译库到 talon-sdk
+# ═══════════════════════════════════════════════════════════════════
+
+update-sdk:
+  stage: update-sdk
+  image: ubuntu:latest
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  needs:
+    - build-linux-amd64
+    - build-linux-arm64
+    - build-macos-amd64
+    - build-macos-arm64
+    - build-windows-amd64
+    - build-windows-arm64
+    - build-linux-loongarch64
+    - build-linux-riscv64
+  before_script:
+    - apt-get update && apt-get install -y git
+    - git config --global user.name "gitlab-ci[bot]"
+    - git config --global user.email "gitlab-ci[bot]@users.noreply.gitlab.com"
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      echo "Updating talon-sdk with pre-built libraries for ${TAG}..."
+
+      # Clone talon-sdk
+      git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-sdk.git" talon-sdk
+      cd talon-sdk
+
+      # Place libraries
+      for PAIR in \
+        "talon-macos-arm64:darwin_arm64" \
+        "talon-macos-amd64:darwin_amd64" \
+        "talon-linux-amd64:linux_amd64" \
+        "talon-linux-arm64:linux_arm64" \
+        "talon-windows-amd64:windows_amd64" \
+        "talon-windows-arm64:windows_arm64" \
+        "talon-linux-loongarch64:linux_loongarch64" \
+        "talon-linux-riscv64:linux_riscv64"
+      do
+        NAME="${PAIR%%:*}"
+        DIR="${PAIR##*:}"
+        mkdir -p "lib/${DIR}"
+        tar -xzf "../dist-lib/libtalon-${NAME}.tar.gz" -C "lib/${DIR}/" 2>/dev/null || \
+          echo "WARNING: libtalon-${NAME}.tar.gz not found, skipping"
+        echo "✓ lib/${DIR}/"
+      done
+
+      # Update talon.h
+      cp ../dist-lib/talon.h include/talon.h 2>/dev/null || true
+
+      # Commit and push
+      git add -f lib/ include/
+      if ! git diff --cached --quiet; then
+        git commit -m "chore: update pre-built libraries to ${TAG}"
+        git push
+      else
+        echo "No changes to commit"
+      fi
+
+      # Tag
+      git tag "${TAG}" 2>/dev/null || true
+      git push origin "${TAG}" 2>/dev/null || true
+      echo "✓ talon-sdk tagged ${TAG}"
+
+# ═══════════════════════════════════════════════════════════════════
+# Stage 5: Publish SDK Packages（Python / Node.js / NuGet / Java）
+# ═══════════════════════════════════════════════════════════════════
+
+.publish_sdk_rules: &publish_sdk_rules
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+
+# ── Python → PyPI ──
+publish-python:
+  stage: publish-sdk
+  image: python:3.11
+  <<: *publish_sdk_rules
+  needs:
+    - update-sdk
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      SEMVER="${TAG#v}"
+
+      git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-sdk.git" talon-sdk
+      cd talon-sdk/python
+
+      pip install setuptools wheel build twine
+      python -m build
+
+      echo "--- Built artifacts ---"
+      ls -lh dist/
+
+      # Verify wheel is pure Python (< 1MB)
+      WHEEL_SIZE=$(stat -c%s dist/*.whl 2>/dev/null || stat -f%z dist/*.whl)
+      if [ "${WHEEL_SIZE}" -gt 1048576 ]; then
+        echo "ERROR: Wheel is ${WHEEL_SIZE} bytes (>1MB), native lib may be accidentally bundled!"
+        exit 1
+      fi
+
+      twine upload dist/*
+  variables:
+    TWINE_USERNAME: __token__
+    TWINE_PASSWORD: ${PYPI_API_TOKEN}
+
+# ── Node.js → npm ──
+publish-nodejs:
+  stage: publish-sdk
+  image: node:20
+  <<: *publish_sdk_rules
+  needs:
+    - update-sdk
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      SEMVER="${TAG#v}"
+
+      git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-sdk.git" talon-sdk
+      cd talon-sdk/nodejs
+
+      npm version ${SEMVER} --no-git-tag-version --allow-same-version
+      echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+      npm publish --access public
+
+# ── .NET → NuGet ──
+publish-nuget:
+  stage: publish-sdk
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  <<: *publish_sdk_rules
+  needs:
+    - update-sdk
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      SEMVER="${TAG#v}"
+
+      apt-get update && apt-get install -y curl
+      cd dotnet/Talon || { git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-sdk.git" talon-sdk && cd talon-sdk/dotnet/Talon; }
+
+      # Download native libs
+      for PAIR in \
+        "talon-macos-arm64:osx-arm64:libtalon.dylib" \
+        "talon-macos-amd64:osx-x64:libtalon.dylib" \
+        "talon-linux-amd64:linux-x64:libtalon.so" \
+        "talon-linux-arm64:linux-arm64:libtalon.so" \
+        "talon-windows-amd64:win-x64:talon.dll" \
+        "talon-windows-arm64:win-arm64:talon.dll" \
+        "talon-linux-loongarch64:linux-loongarch64:libtalon.so" \
+        "talon-linux-riscv64:linux-riscv64:libtalon.so"
+      do
+        NAME="${PAIR%%:*}"
+        REST="${PAIR#*:}"
+        RID="${REST%%:*}"
+        mkdir -p "runtimes/${RID}/native"
+        curl -fSL --retry 3 \
+          "https://github.com/darkmice/talon-bin/releases/download/v${SEMVER}/libtalon-${NAME}.tar.gz" \
+          -o /tmp/lib.tar.gz
+        tar -xzf /tmp/lib.tar.gz -C "runtimes/${RID}/native/"
+        echo "✓ runtimes/${RID}/native/"
+      done
+
+      dotnet pack -c Release -p:Version=${SEMVER} -o ../../nupkg
+      dotnet nuget push ../../nupkg/*.nupkg \
+        --api-key ${NUGET_API_KEY} \
+        --source https://api.nuget.org/v3/index.json \
+        --skip-duplicate
+
+# ── Java → Maven Central ──
+publish-java:
+  stage: publish-sdk
+  image: maven:3.9-eclipse-temurin-11
+  <<: *publish_sdk_rules
+  needs:
+    - update-sdk
+  before_script:
+    - apt-get update && apt-get install -y curl gnupg
+    # Import GPG key
+    - echo "${MAVEN_GPG_KEY}" | base64 -d | gpg --batch --import || true
+  script:
+    - |
+      TAG="${CI_COMMIT_TAG}"
+      SEMVER="${TAG#v}"
+
+      git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-sdk.git" talon-sdk
+      cd talon-sdk/java
+
+      # Download native libs
+      for PAIR in \
+        "talon-macos-arm64:darwin/arm64:libtalon.dylib" \
+        "talon-macos-amd64:darwin/amd64:libtalon.dylib" \
+        "talon-linux-amd64:linux/amd64:libtalon.so" \
+        "talon-linux-arm64:linux/arm64:libtalon.so" \
+        "talon-windows-amd64:windows/amd64:talon.dll" \
+        "talon-windows-arm64:windows/arm64:talon.dll" \
+        "talon-linux-loongarch64:linux/loongarch64:libtalon.so" \
+        "talon-linux-riscv64:linux/riscv64:libtalon.so"
+      do
+        NAME="${PAIR%%:*}"
+        REST="${PAIR#*:}"
+        DIR="${REST%%:*}"
+        mkdir -p "src/main/resources/native/${DIR}"
+        curl -fSL --retry 3 \
+          "https://github.com/darkmice/talon-bin/releases/download/v${SEMVER}/libtalon-${NAME}.tar.gz" \
+          -o /tmp/lib.tar.gz
+        tar -xzf /tmp/lib.tar.gz -C "src/main/resources/native/${DIR}/"
+        echo "✓ native/${DIR}/"
+      done
+
+      mvn versions:set -DnewVersion=${SEMVER}
+      mvn clean deploy -P release -DskipTests \
+        -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
+  variables:
+    MAVEN_USERNAME: ${OSSRH_USERNAME}
+    MAVEN_PASSWORD: ${OSSRH_PASSWORD}
+
+# ═══════════════════════════════════════════════════════════════════
+# Docs — 推送到 main 时自动发布文档
+# ═══════════════════════════════════════════════════════════════════
+
+publish-docs:
+  stage: docs
+  image: node:20
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - packages/docs/**
+        - .gitlab-ci.yml
+    - when: manual
+      allow_failure: true
+  before_script:
+    - npm install -g pnpm@9
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm docs:build
+
+    # Sync to talon-docs repo
+    - git clone "https://oauth2:${TALON_BIN_TOKEN}@github.com/darkmice/talon-docs.git" talon-docs
+    - |
+      cd talon-docs
+      find . -maxdepth 1 ! -name '.' ! -name '.*' ! -name 'skills' ! -name 'README.md' -exec rm -rf {} +
+      cp -R ../packages/docs/.vitepress/dist/* .
+      git config user.name "gitlab-ci[bot]"
+      git config user.email "gitlab-ci[bot]@users.noreply.gitlab.com"
+      git add -A
+      if git diff --cached --quiet; then
+        echo "No changes to docs"
+      else
+        git commit -m "docs: sync from talon ${CI_COMMIT_SHORT_SHA}"
+        git push
+      fi

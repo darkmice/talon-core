@@ -1,0 +1,10 @@
+#
+# Copyright (c) 2026 Talon Contributors
+# Author: dark.lijin@gmail.com
+# Licensed under the Talon Community Dual License Agreement.
+# See the LICENSE file in the project root for full license information.
+#
+# Talon 项目 rustfmt 配置（见 docs/10-coding-standards.md）
+edition = "2021"
+max_width = 100
+reorder_imports = true

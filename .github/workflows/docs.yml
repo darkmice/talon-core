@@ -1,0 +1,56 @@
+name: Publish Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs
+        run: pnpm docs:build
+
+      - name: Checkout talon-docs
+        uses: actions/checkout@v4
+        with:
+          repository: darkmice/talon-docs
+          token: ${{ secrets.TALON_BIN_TOKEN }}
+          path: talon-docs
+
+      - name: Sync built docs to talon-docs
+        run: |
+          cd talon-docs
+          # 清理旧文件（保留 .git、各 IDE skills 目录、skills/）
+          find . -maxdepth 1 ! -name '.' ! -name '.*' ! -name 'skills' ! -name 'README.md' -exec rm -rf {} +
+          # 复制构建产物
+          cp -R ../packages/docs/.vitepress/dist/* .
+          # 提交推送
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to docs"
+          else
+            git commit -m "docs: sync from talon ${GITHUB_SHA::8}"
+            git push
+          fi

@@ -1,0 +1,88 @@
+/*
+ * Copyright (c) 2026 Talon Contributors
+ * Author: dark.lijin@gmail.com
+ * Licensed under the Talon Community Dual License Agreement.
+ * See the LICENSE file in the project root for full license information.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-dark-800 text-slate-100 h-screen overflow-hidden;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Allow text selection in data/content areas */
+pre, code, textarea, input,
+td, .select-text, [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #111722; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Global keyboard focus ring */
+:focus-visible {
+  outline: 2px solid rgba(19, 91, 236, 0.6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+
+/* Primary button glow + shine effect */
+.btn-glow {
+  position: relative;
+  overflow: hidden;
+}
+.btn-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(255,255,255,0.12) 45%,
+    rgba(255,255,255,0.12) 55%,
+    transparent 60%
+  );
+  transform: translateX(-100%);
+  transition: transform 0.6s ease;
+}
+.btn-glow:hover::before {
+  transform: translateX(100%);
+}
+.btn-glow:disabled::before {
+  display: none;
+}
+
+/* Toast slide-up animation */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
+}
+
+/* Vertical text for collapsed panels */
+.writing-vertical-lr {
+  writing-mode: vertical-lr;
+}
+
+/* SQL editor: neutral selection tint that contrasts with all syntax colors */
+.sql-editor::selection {
+  background: rgba(148, 163, 184, 0.28);
+  color: transparent;
+}

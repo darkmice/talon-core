@@ -1,0 +1,16 @@
+{
+  "name": "talon",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Talon — AI-Native Multi-Model Data Engine",
+  "scripts": {
+    "docs:dev": "pnpm --filter @talon/docs dev",
+    "docs:build": "pnpm --filter @talon/docs build",
+    "docs:preview": "pnpm --filter @talon/docs preview",
+    "gui:dev": "pnpm --filter talon-gui dev"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  }
+}

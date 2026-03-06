@@ -1,0 +1,246 @@
+# Talon — AI-Native Multi-Model Data Engine — Full API Reference
+
+## Opening the Database
+
+```rust
+let db = Talon::open("./data")?;
+let db = Talon::open_with_config("./data", StorageConfig { .. })?;
+let db = Talon::open_with_cluster("./data", StorageConfig::default(), ClusterConfig { role: ClusterRole::Primary, .. })?;
+```
+
+## SQL Engine
+
+```rust
+db.run_sql(sql: &str) -> Result<Vec<Vec<Value>>, Error>
+db.run_sql_param(sql: &str, params: &[Value]) -> Result<Vec<Vec<Value>>, Error>
+db.run_sql_batch(sqls: &[&str]) -> Result<Vec<Result<Vec<Vec<Value>>, Error>>, Error>
+db.batch_insert_rows(table: &str, columns: &[&str], rows: Vec<Vec<Value>>) -> Result<(), Error>
+db.import_sql(reader: impl BufRead) -> Result<SqlImportStats, Error>
+db.import_sql_file(path: impl AsRef<Path>) -> Result<SqlImportStats, Error>
+```
+
+Types: INTEGER, FLOAT, TEXT, BOOLEAN, BLOB, TIMESTAMP, JSON, NULL, VECTOR(N)
+DDL: CREATE/ALTER/DROP TABLE, CREATE/DROP INDEX, CREATE VECTOR INDEX, COMMENT ON
+DML: INSERT, UPDATE, DELETE, UPSERT (ON CONFLICT), INSERT RETURNING, multi-table UPDATE/DELETE
+Query: WHERE, JOIN (INNER/LEFT/RIGHT/FULL OUTER), GROUP BY/HAVING, UNION, subqueries, ORDER BY, LIMIT, DISTINCT ON
+Window: ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, NTILE, SUM/AVG/COUNT OVER
+Aggregates: COUNT, SUM, AVG, MIN, MAX, ARRAY_AGG, PERCENTILE_CONT, PERCENTILE_DISC
+Transactions: BEGIN/COMMIT/ROLLBACK (MVCC)
+
+## KV Engine
+
+```rust
+db.kv()? -> KvEngine (write)    db.kv_read()? -> KvEngine (read-only)
+
+kv.set(key: &[u8], value: &[u8], ttl_secs: Option<u64>) -> Result<(), Error>
+kv.get(key: &[u8]) -> Result<Option<Vec<u8>>, Error>
+kv.del(key: &[u8]) -> Result<(), Error>
+kv.mset(keys: &[&[u8]], values: &[&[u8]]) -> Result<(), Error>
+kv.mget(keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>, Error>
+kv.mdel(keys: &[&[u8]]) -> Result<(), Error>
+kv.del_prefix(prefix: &[u8]) -> Result<u64, Error>
+kv.exists(key: &[u8]) -> Result<bool, Error>
+kv.setnx(key: &[u8], value: &[u8], ttl_secs: Option<u64>) -> Result<bool, Error>
+kv.expire(key: &[u8], secs: u64) -> Result<(), Error>
+kv.ttl(key: &[u8]) -> Result<Option<u64>, Error>
+kv.persist(key: &[u8]) -> Result<bool, Error>
+kv.incr(key: &[u8]) -> Result<i64, Error>
+kv.incrby(key: &[u8], delta: i64) -> Result<i64, Error>
+kv.decrby(key: &[u8], delta: i64) -> Result<i64, Error>
+kv.incrbyfloat(key: &[u8], delta: f64) -> Result<f64, Error>
+kv.append(key: &[u8], value: &[u8]) -> Result<usize, Error>
+kv.getset(key: &[u8], value: &[u8]) -> Result<Option<Vec<u8>>, Error>
+kv.rename(src: &[u8], dst: &[u8]) -> Result<(), Error>
+kv.getrange(key: &[u8], start: i64, end: i64) -> Result<Vec<u8>, Error>
+kv.setrange(key: &[u8], offset: usize, value: &[u8]) -> Result<usize, Error>
+kv.keys_prefix(prefix: &[u8]) -> Result<Vec<Vec<u8>>, Error>
+kv.keys_match(pattern: &[u8]) -> Result<Vec<Vec<u8>>, Error>  // glob: * ?
+kv.keys_prefix_limit(prefix: &[u8], offset: u64, limit: u64) -> Result<Vec<Vec<u8>>, Error>
+kv.scan_prefix_limit(prefix: &[u8], offset: u64, limit: u64) -> Result<Vec<KvPair>, Error>
+kv.key_count() -> Result<u64, Error>
+kv.key_type(key: &[u8]) -> Result<&'static str, Error>  // "string" | "bytes" | "none"
+kv.start_ttl_cleaner(interval_secs: u64) -> TtlCleaner
+```
+
+## TimeSeries Engine
+
+```rust
+db.create_timeseries(name: &str, schema: TsSchema) -> Result<TsEngine, Error>
+db.open_timeseries(name: &str) -> Result<TsEngine, Error>
+
+ts.insert(timestamp_ms: i64, values: &[f64]) -> Result<(), Error>
+ts.insert_batch(points: &[(i64, Vec<f64>)]) -> Result<(), Error>
+ts.query(q: &TsQuery) -> Result<Vec<DataPoint>, Error>
+ts.aggregate(q: &TsAggQuery) -> Result<Vec<AggBucket>, Error>
+
+list_timeseries(store) / describe_timeseries(store, name) / drop_timeseries(store, name)
+AggFunc: Avg, Sum, Min, Max, Count, First, Last
+FillStrategy: None, Null, Previous, Linear, Value(f64)
+```
+
+## MessageQueue Engine
+
+```rust
+db.mq()? -> MqEngine (write)    db.mq_read()? -> MqEngine (read-only)
+
+mq.create_topic(topic: &str, max_len: u64) -> Result<(), Error>
+mq.publish(topic: &str, payload: &[u8]) -> Result<u64, Error>
+mq.publish_batch(topic: &str, payloads: &[&[u8]]) -> Result<Vec<u64>, Error>
+mq.publish_with_key(topic: &str, payload: &[u8], key: &str) -> Result<u64, Error>
+mq.publish_delayed(topic: &str, payload: &[u8], delay_ms: u64) -> Result<u64, Error>
+mq.publish_with_priority(topic: &str, payload: &[u8], priority: u8) -> Result<u64, Error>
+mq.subscribe(topic: &str, group: &str) -> Result<(), Error>
+mq.poll(topic: &str, group: &str, consumer: &str, count: usize) -> Result<Vec<Message>, Error>
+mq.poll_block(topic, group, consumer, count, block_ms) -> Result<Vec<Message>, Error>
+mq.poll_with_filter(topic, group, consumer, count, key_filter) -> Result<Vec<Message>, Error>
+mq.ack(topic, group, consumer, message_id) -> Result<(), Error>
+mq.nack(topic, group, consumer, message_id) -> Result<(), Error>
+mq.list_topics() / mq.delete_topic(topic) / mq.describe_topic(topic)
+```
+
+## Vector Engine
+
+```rust
+db.vector(name: &str)? -> VectorEngine (write)
+db.vector_read(name: &str)? -> VectorEngine (read-only)
+
+ve.insert(id: u64, vector: &[f32]) -> Result<(), Error>
+ve.insert_batch(items: &[(u64, Vec<f32>)]) -> Result<(), Error>
+ve.search(query: &[f32], k: usize) -> Result<Vec<SearchResult>, Error>
+ve.search_with_filter(query: &[f32], k: usize, filter: &[MetaFilter]) -> Result<Vec<SearchResult>, Error>
+ve.recommend(positive: &[&[f32]], negative: &[&[f32]], k: usize) -> Result<Vec<RecommendHit>, Error>
+ve.discover(target: &[f32], context: &[(&[f32], &[f32])], k: usize) -> Result<Vec<DiscoverHit>, Error>
+ve.enable_quantization() -> Result<(), Error>  // SQ8, 4:1 compression
+ve.set_ef_search(ef_search: usize) -> Result<(), Error>
+
+SQL: vec_cosine(col, vec), vec_l2(col, vec), vec_dot(col, vec)
+MetaFilterOp: Eq, Ne, Gt, Lt, Gte, Lte, In
+```
+
+## Full-Text Search Engine
+
+```rust
+db.fts()? -> FtsEngine (write)    db.fts_read()? -> FtsEngine (read-only)
+
+fts.index(name: &str, id: &str, text: &str) -> Result<(), Error>
+fts.search(name: &str, query: &str, limit: usize) -> Result<Vec<SearchHit>, Error>
+fts.search_bool(name, query: &BoolQuery, limit) -> Result<Vec<SearchHit>, Error>
+fts.search_phrase(name, phrase, limit) -> Result<Vec<SearchHit>, Error>
+fts.search_term(name, field, term, limit) -> Result<Vec<SearchHit>, Error>
+fts.search_range(name, query: &RangeQuery, limit) -> Result<Vec<SearchHit>, Error>
+fts.search_regexp(name, pattern, limit) -> Result<Vec<SearchHit>, Error>
+fts.search_wildcard(name, pattern, limit) -> Result<Vec<SearchHit>, Error>
+fts.delete(name, id) / fts.update(name, id, text)
+fts.list_indexes() / fts.get_mapping(name) / fts.add_alias(name, alias)
+fts.reindex(name) / fts.update_by_query(name, query, field, value) / fts.delete_by_query(name, query)
+
+hybrid_search(store, &HybridQuery { fts_index, vec_index, query_text, query_vec, limit, pre_filter })
+Analyzers: Standard (Unicode), Jieba (Chinese), Whitespace, Keyword
+```
+
+## GEO Engine
+
+```rust
+db.geo()? -> GeoEngine (write)    db.geo_read()? -> GeoEngine (read-only)
+
+geo.create(name) / geo.geo_add(name, member, lng, lat) / geo.geo_add_batch(name, members)
+geo.geo_add_nx(name, member, lng, lat) -> bool  // NX mode
+geo.geo_add_xx(name, member, lng, lat) -> bool  // XX mode
+geo.geo_add_ch(name, member, lng, lat) -> bool  // CH mode
+geo.geo_pos(name, member) -> Option<GeoPoint>
+geo.geo_dist(name, key1, key2, unit) -> Option<f64>
+geo.geo_del(name, member) -> bool
+geo.geo_hash(name, member) -> Option<String>
+geo.geo_members(name) -> Vec<String>
+geo.geo_count(name) -> u64
+geo.geo_search(name, lng, lat, radius, unit, limit) -> Vec<GeoMember>  // Circle
+geo.geo_search_box(name, lng, lat, width, height, unit, limit) -> Vec<GeoMember>  // Rectangle
+geo.geo_search_store(name, dest, lng, lat, radius, unit, limit) -> u64  // GEOSEARCHSTORE
+```
+
+## Graph Engine
+
+```rust
+db.graph()? -> GraphEngine (write)    db.graph_read()? -> GraphEngine (read-only)
+
+graph.add_vertex(graph, id?, label?, properties?) -> u64
+graph.get_vertex(graph, id) / graph.update_vertex(graph, id, props) / graph.delete_vertex(graph, id)
+graph.add_edge(graph, from, to, label?, properties?) -> u64
+graph.get_edge(graph, id) / graph.delete_edge(graph, id)
+graph.get_edges(graph, vertex_id, direction) -> Vec<Edge>
+graph.neighbors(graph, vertex_id, direction) -> Vec<u64>
+graph.bfs(graph, start, max_depth, direction) -> Vec<u64>
+graph.dfs(graph, start, max_depth, direction) -> Vec<u64>
+graph.shortest_path(graph, from, to, direction) -> Option<Vec<u64>>
+graph.pagerank(graph, iterations, damping) -> Vec<(u64, f64)>
+graph.vertex_count(graph) / graph.edge_count(graph)
+Direction: Out, In, Both
+```
+
+## AI Engine
+
+```rust
+db.ai()? -> AiEngine (write)    db.ai_read()? -> AiEngine (read-only)
+
+// Session
+ai.create_session(id, metadata: BTreeMap, ttl_secs?) -> ()
+ai.get_session(id) / ai.list_sessions() / ai.delete_session(id)
+ai.update_session(id, metadata) / ai.add_session_tags(id, tags) / ai.remove_session_tags(id, tags)
+ai.archive_session(id) / ai.unarchive_session(id) / ai.export_session(id)
+ai.session_stats(id) / ai.cleanup_expired_sessions()
+
+// Context
+ai.append_message(session_id, &ContextMessage { role, content, token_count })
+ai.get_context(session_id, last_n) -> Vec<ContextMessage>
+ai.get_context_window(session_id, max_tokens) -> Vec<ContextMessage>
+ai.clear_context(session_id) / ai.context_token_count(session_id) -> u32
+
+// Memory
+ai.store_memory(session_id, text, embedding, ttl_secs?) -> String (memory_id)
+ai.search_memories(session_id, query_embedding, k) -> Vec<MemorySearchResult>
+ai.update_memory(memory_id, text, embedding) / ai.delete_memory(memory_id)
+ai.find_duplicate_memories(session_id, threshold) -> Vec<(id1, id2, similarity)>
+ai.cleanup_expired_memories() / ai.memory_stats(session_id)
+
+// RAG
+ai.store_rag_document(&RagDocumentWithChunks { document, chunks })
+ai.search_rag(query_embedding, k) -> Vec<RagSearchResult>
+ai.get_rag_document(doc_id) / ai.delete_rag_document(doc_id)
+
+// Agent
+ai.cache_tool_result(tool_name, args_hash, result, ttl?) / ai.get_cached_tool_result(tool_name, args_hash)
+ai.invalidate_tool_cache(tool_name) -> u64
+ai.save_agent_state(session_id, &AgentStep) / ai.get_agent_state(session_id, step_id)
+ai.list_agent_steps(session_id) / ai.rollback_agent_to_step(session_id, step_id)
+
+// Trace
+ai.record_trace(session_id, &TraceRecord { run_id, operation, input, output, latency_ms, token_usage })
+ai.query_traces(session_id, run_id?, limit) / ai.trace_stats(session_id, run_id?)
+ai.trace_performance_report(session_id, run_id?)
+
+// Embedding Cache
+ai.cache_embedding(text_hash, embedding) / ai.get_cached_embedding(text_hash)
+
+// Intent
+ai.query_intent(&IntentQuery { text, context }) -> IntentResult { kind, confidence, suggested_action }
+```
+
+## Cross-Engine Fusion
+
+```rust
+geo_vector_search(store, &GeoVectorQuery { geo_name, vec_name, lng, lat, radius_m, query_vec, k })
+graph_vector_search(store, &GraphVectorQuery { graph, vec_name, start, max_depth, direction, query_vec, k })
+graph_fts_search(store, &GraphFtsQuery { graph, fts_name, start, max_depth, direction, query, k })
+triple_search(store, &TripleQuery { graph, fts_name, vec_name, start, max_depth, direction, text_query, vec_query, k })
+```
+
+## Utility
+
+```rust
+db.store_ref() -> &Store           // Underlying store reference
+db.persist() -> ()                 // Flush to disk
+db.batch() -> Batch                // Cross-engine atomic write batch
+db.cluster_status() -> ClusterStatus
+db.promote() -> ()                 // Replica → Primary failover
+db.export(dir, keyspace_names) / db.import(dir)  // Backup/restore
+```

@@ -1,0 +1,20 @@
+# Talon
+
+> AI-Native Multi-Model Data Engine
+> 9 engines in one binary: SQL · KV · TimeSeries · MQ · Vector · FTS · GEO · Graph · AI
+> Single binary, zero dependencies, embedded + server dual-mode
+
+## Docs
+
+- [Getting Started](https://docs.talon.dev/guide/getting-started): Quick start guide
+- [SQL Engine](https://docs.talon.dev/engines/sql): Relational DB with window functions, JOINs, UPSERT
+- [KV Engine](https://docs.talon.dev/engines/kv): Redis-compatible key-value with TTL
+- [TimeSeries Engine](https://docs.talon.dev/engines/timeseries): Time-series with downsampling
+- [MessageQueue Engine](https://docs.talon.dev/engines/message-queue): MQ with consumer groups, DLQ
+- [Vector Engine](https://docs.talon.dev/engines/vector): HNSW ANN search with recommend/discover
+- [FTS Engine](https://docs.talon.dev/engines/full-text-search): BM25 + ES-compatible queries
+- [GEO Engine](https://docs.talon.dev/engines/geo): Geohash spatial indexing
+- [Graph Engine](https://docs.talon.dev/engines/graph): Property graph with BFS/DFS/PageRank
+- [AI Engine](https://docs.talon.dev/engines/ai): Session/Context/Memory/RAG/Agent/Trace
+- [Fusion Queries](https://docs.talon.dev/engines/fusion-queries): Cross-engine combinations
+- [Full API Reference](https://docs.talon.dev/llms-full.txt): Complete API signatures

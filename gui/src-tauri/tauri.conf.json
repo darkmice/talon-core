@@ -1,0 +1,33 @@
+{
+  "productName": "Talon Manager",
+  "version": "0.1.0",
+  "identifier": "com.talon.manager",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5188",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "SuperClaw",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 860,
+        "minHeight": 580,
+        "resizable": true,
+        "maximizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

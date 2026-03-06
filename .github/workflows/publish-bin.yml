@@ -1,0 +1,286 @@
+name: Publish Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: talon-linux-amd64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: so
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: talon-linux-arm64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: so
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            name: talon-macos-amd64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: dylib
+          - target: aarch64-apple-darwin
+            os: macos-15
+            name: talon-macos-arm64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: dylib
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: talon-windows-amd64
+            lib_prefix: ""
+            lib_ext: lib
+            dylib_ext: dll
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            name: talon-windows-arm64
+            lib_prefix: ""
+            lib_ext: lib
+            dylib_ext: dll
+          - target: loongarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: talon-linux-loongarch64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: so
+            use_cross: true
+          - target: riscv64gc-unknown-linux-gnu
+            os: ubuntu-latest
+            name: talon-linux-riscv64
+            lib_prefix: lib
+            lib_ext: a
+            dylib_ext: so
+            use_cross: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (apt)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install cross (Docker-based cross-compilation)
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (cargo)
+        if: matrix.use_cross != true
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Build (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binaries (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/talon dist/${{ matrix.name }} 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/talon-cli dist/${{ matrix.name }}-cli 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/talon-tui dist/${{ matrix.name }}-tui 2>/dev/null || true
+          cd dist && tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}* && cd ..
+
+      - name: Package binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/talon.exe dist/${{ matrix.name }}.exe -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/talon-cli.exe dist/${{ matrix.name }}-cli.exe -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/talon-tui.exe dist/${{ matrix.name }}-tui.exe -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist/${{ matrix.name }}* -DestinationPath dist/${{ matrix.name }}.zip
+          # Also create tar.gz for consistency
+          cd dist; tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}*; cd ..
+
+      - name: Package library (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist-lib
+          cp target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}talon.${{ matrix.lib_ext }} dist-lib/
+          cp target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}talon.${{ matrix.dylib_ext }} dist-lib/ 2>/dev/null || true
+          cp include/talon.h dist-lib/
+          cd dist-lib && tar czf libtalon-${{ matrix.name }}.tar.gz * && cd ..
+
+      - name: Package library (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-lib
+          Copy-Item target/${{ matrix.target }}/release/talon.lib dist-lib/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/talon.dll dist-lib/ -ErrorAction SilentlyContinue
+          Copy-Item include/talon.h dist-lib/
+          cd dist-lib; tar czf libtalon-${{ matrix.name }}.tar.gz *; cd ..
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}.tar.gz
+
+      - name: Upload library artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libtalon-${{ matrix.name }}
+          path: dist-lib/libtalon-${{ matrix.name }}.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get tag name
+        id: tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name '*.tar.gz' -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release on public repo
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: darkmice/talon-bin
+          tag_name: ${{ steps.tag.outputs.TAG }}
+          name: Talon ${{ steps.tag.outputs.TAG }}
+          body: |
+            ## Talon ${{ steps.tag.outputs.TAG }}
+
+            AI-native multi-model data engine: SQL + KV + TimeSeries + MessageQueue + Vector in a single binary.
+
+            ### Downloads
+
+            ### Binaries
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | Linux | x86_64 | `talon-linux-amd64.tar.gz` |
+            | Linux | aarch64 | `talon-linux-arm64.tar.gz` |
+            | macOS | x86_64 | `talon-macos-amd64.tar.gz` |
+            | macOS | aarch64 (Apple Silicon) | `talon-macos-arm64.tar.gz` |
+            | Windows | x86_64 | `talon-windows-amd64.tar.gz` |
+            | Windows | aarch64 (ARM) | `talon-windows-arm64.tar.gz` |
+            | Linux | loongarch64 (龙芯) | `talon-linux-loongarch64.tar.gz` |
+            | Linux | riscv64 | `talon-linux-riscv64.tar.gz` |
+
+            ### Libraries (for embedding via FFI / Rust)
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | Linux | x86_64 | `libtalon-talon-linux-amd64.tar.gz` |
+            | Linux | aarch64 | `libtalon-talon-linux-arm64.tar.gz` |
+            | macOS | x86_64 | `libtalon-talon-macos-amd64.tar.gz` |
+            | macOS | aarch64 (Apple Silicon) | `libtalon-talon-macos-arm64.tar.gz` |
+            | Windows | x86_64 | `libtalon-talon-windows-amd64.tar.gz` |
+            | Windows | aarch64 (ARM) | `libtalon-talon-windows-arm64.tar.gz` |
+            | Linux | loongarch64 (龙芯) | `libtalon-talon-linux-loongarch64.tar.gz` |
+            | Linux | riscv64 | `libtalon-talon-linux-riscv64.tar.gz` |
+
+            Each library archive contains `libtalon.a`/`talon.lib` (static library) + `talon.dll`/`.dylib`/`.so` (dynamic library) + `talon.h`.
+
+            ### Rust usage
+
+            ```toml
+            [dependencies]
+            talon-sys = { git = "https://github.com/darkmice/talon-bin.git" }
+            ```
+
+            ### Verify checksums
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+          files: release/*
+          token: ${{ secrets.TALON_BIN_TOKEN }}
+          generate_release_notes: false
+
+  update-sdk:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all library artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Checkout talon-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: darkmice/talon-sdk
+          token: ${{ secrets.TALON_BIN_TOKEN }}
+          path: talon-sdk
+
+      - name: Place libraries into talon-sdk
+        run: |
+          cd talon-sdk
+          for pair in "talon-macos-arm64:darwin_arm64" "talon-macos-amd64:darwin_amd64" "talon-linux-amd64:linux_amd64" "talon-linux-arm64:linux_arm64" "talon-windows-amd64:windows_amd64" "talon-windows-arm64:windows_arm64" "talon-linux-loongarch64:linux_loongarch64" "talon-linux-riscv64:linux_riscv64"; do
+            NAME="${pair%%:*}"
+            DIR="${pair##*:}"
+            mkdir -p lib/${DIR}
+            tar -xzf ../artifacts/libtalon-${NAME}/libtalon-${NAME}.tar.gz -C lib/${DIR}/
+            ls -lh lib/${DIR}/
+            echo "✓ lib/${DIR}/ placed"
+          done
+
+      - name: Update talon.h
+        run: |
+          cp artifacts/libtalon-talon-macos-arm64/talon.h talon-sdk/include/talon.h 2>/dev/null || true
+
+      - name: Get tag name
+        id: tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Commit and push to talon-sdk
+        run: |
+          cd talon-sdk
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f lib/ include/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update pre-built libraries to ${{ steps.tag.outputs.TAG }}"
+            git push
+          fi
+
+      - name: Tag talon-sdk
+        run: |
+          cd talon-sdk
+          TAG="${{ steps.tag.outputs.TAG }}"
+          git tag "${TAG}" || true
+          git push origin "${TAG}" || true
