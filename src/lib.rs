@@ -74,7 +74,7 @@ pub use vector::metadata::{MetaFilter, MetaFilterOp, MetaValue};
 pub use vector::VectorEngine;
 
 // 嵌入式 JSON 命令入口（供 GUI 等嵌入场景使用）。
-pub use ffi_exec::execute_cmd;
+pub use ffi_exec::{execute_cmd, register_ai_handler, AiModuleHandler};
 
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 

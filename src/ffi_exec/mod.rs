@@ -10,6 +10,27 @@
 
 use crate::sql::{parse, Stmt};
 use crate::Talon;
+use std::sync::OnceLock;
+
+// ---------------------------------------------------------------------------
+// AI 模块插件注册（允许 talon-ai 在链接时注入处理器，避免循环依赖）
+// ---------------------------------------------------------------------------
+
+/// AI 模块命令处理器的函数签名。
+/// 参数：(Talon 实例, action, params JSON)
+/// 返回：JSON 字符串响应
+pub type AiModuleHandler = fn(&Talon, &str, &serde_json::Value) -> String;
+
+/// 全局 AI 模块处理器（由 talon-ai bundle 在启动时注册）。
+static AI_MODULE_HANDLER: OnceLock<AiModuleHandler> = OnceLock::new();
+
+/// 注册 AI 模块命令处理器。
+///
+/// 由 `talon-ai` 的 bundle crate 在程序启动时（通过 `ctor`）调用。
+/// 注册后，`talon_execute({"module":"ai", ...})` 将路由到此处理器。
+pub fn register_ai_handler(handler: AiModuleHandler) {
+    AI_MODULE_HANDLER.set(handler).ok();
+}
 
 /// 解析 JSON 命令并路由到对应引擎模块。
 ///
@@ -32,7 +53,16 @@ pub fn execute_cmd(db: &Talon, cmd_str: &str) -> String {
         "graph" => graph::exec_graph(db, action, &params),
         "geo" => geo::exec_geo(db, action, &params),
         "fts" => fts::exec_fts(db, action, &params),
-        "ai" => err_json("AI engine 已迁移至 talon-ai crate，请使用 talon-ai SDK"),
+        "ai" => {
+            if let Some(handler) = AI_MODULE_HANDLER.get() {
+                handler(db, action, &params)
+            } else {
+                err_json(
+                    "AI engine is a paid module. Please activate with a talon-ai license.\n\
+                         Visit https://talon.com.cn for licensing.",
+                )
+            }
+        }
         "backup" => exec_backup(db, action, &params),
         "stats" => ok_json(db.stats()),
         "database_stats" => match db.database_stats() {
