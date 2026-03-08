@@ -48,17 +48,26 @@ pub unsafe extern "C" fn talon_open(path: *const c_char) -> *mut TalonHandle {
     if path.is_null() {
         return ptr::null_mut();
     }
-    let path = match CStr::from_ptr(path).to_str() {
+    let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
+        Err(e) => {
+            eprintln!("Talon open FFI invalid path: {}", e);
+            return ptr::null_mut();
+        }
     };
-    match Talon::open(path) {
+    match Talon::open(path_str) {
         Ok(db) => Box::into_raw(Box::new(TalonHandle {
             inner: Arc::new(db),
             server_stop: std::sync::Mutex::new(None),
             server_thread: std::sync::Mutex::new(None),
         })),
-        Err(_) => ptr::null_mut(),
+        Err(e) => {
+            eprintln!(
+                "FATAL ERROR IN FFI: Talon::open failed for path '{}': {:?}",
+                path_str, e
+            );
+            ptr::null_mut()
+        }
     }
 }
 
@@ -104,7 +113,11 @@ pub unsafe extern "C" fn talon_run_sql(
             0
         }
         Err(e) => {
-            eprintln!("[Talon FFI] run_sql error: {} | sql={}", e, &sql[..sql.len().min(120)]);
+            eprintln!(
+                "[Talon FFI] run_sql error: {} | sql={}",
+                e,
+                &sql[..sql.len().min(120)]
+            );
             -1
         }
     }
@@ -515,8 +528,12 @@ pub unsafe extern "C" fn talon_vector_search_bin(
     out_data: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
-    if handle.is_null() || index_name.is_null() || vec_data.is_null()
-        || metric.is_null() || out_data.is_null() || out_len.is_null()
+    if handle.is_null()
+        || index_name.is_null()
+        || vec_data.is_null()
+        || metric.is_null()
+        || out_data.is_null()
+        || out_len.is_null()
     {
         return -1;
     }
