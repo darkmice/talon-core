@@ -43,5 +43,5 @@ features:
     details: 属性图模型，BFS/DFS 遍历、最短路径、PageRank
   - icon: 🤖
     title: AI 引擎
-    details: 原生 Session/Context/Memory/RAG/Agent/Trace 抽象，为 LLM 应用而生
+    details: 原生 Session/Context/Memory/RAG/Agent/Trace 抽象，LLM Provider 配置、自动 Embedding/摘要、精确 Token 计数
 ---

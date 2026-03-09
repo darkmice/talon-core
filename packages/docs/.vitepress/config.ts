@@ -145,8 +145,8 @@ export default defineConfig({
     },
 
     footer: {
-      message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2024-present Talon Contributors',
+      message: 'Released under the Talon Community Dual License.',
+      copyright: 'Copyright © 2024–2026 Talon Contributors',
     },
 
     outline: {

@@ -43,5 +43,5 @@ features:
     details: Property graph with BFS/DFS traversal, shortest path, PageRank, and 935K reads/s.
   - icon: 🤖
     title: AI Engine
-    details: Native Session, Context, Memory, RAG, Agent, Trace, Intent abstractions for LLM applications.
+    details: Native Session, Context, Memory, RAG, Agent, Trace, Intent, LLM Provider, Auto-Embedding, Auto-Summarize, Token Count.
 ---

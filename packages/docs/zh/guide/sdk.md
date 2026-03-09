@@ -25,7 +25,7 @@ Talon 提供 **5 种语言** 的官方 SDK，全部实现 10 个引擎模块的 
 | Vector | 7 | HNSW 向量索引与搜索 |
 | TS | 7 | 时序引擎 |
 | MQ | 9 | 消息队列 |
-| AI | 19 | Session / Context / Memory / Trace |
+| AI | 30+ | Session / Context / Memory / RAG / Agent / Trace / LLM 配置 / 自动 Embedding |
 | FTS | 16 | 全文搜索（BM25 + 模糊 + 混合搜索） |
 | Geo | 10 | 地理空间（半径 / 矩形 / 围栏） |
 | Graph | 19 | 属性图（CRUD + BFS + 最短路径 + PageRank） |

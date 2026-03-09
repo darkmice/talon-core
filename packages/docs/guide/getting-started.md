@@ -8,7 +8,7 @@ Talon is an AI-Native Multi-Model Data Engine that unifies 9 data engines into a
 
 ```toml
 [dependencies]
-talon = { git = "https://github.com/darkmice/talon-bin.git", tag = "v0.1.8", package = "talon-sys" }
+talon = { git = "https://github.com/darkmice/talon-bin.git", tag = "v0.1.10", package = "talon-sys" }
 ```
 
 ## Quick Start (Embedded Mode)

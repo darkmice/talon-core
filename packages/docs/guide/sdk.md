@@ -25,7 +25,7 @@ All SDKs cover the complete set of 10 engine modules:
 | Vector | 7 | HNSW vector index & search |
 | TS | 7 | Time-series engine |
 | MQ | 9 | Message queue |
-| AI | 19 | Session / Context / Memory / Trace |
+| AI | 30+ | Session / Context / Memory / RAG / Agent / Trace / LLM Config / Auto-Embed |
 | FTS | 16 | Full-text search (BM25 + fuzzy + hybrid) |
 | Geo | 10 | Geospatial (radius / box / fence) |
 | Graph | 19 | Property graph (CRUD + BFS + shortest path + PageRank) |
