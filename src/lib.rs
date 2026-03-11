@@ -48,7 +48,7 @@ pub use cross::{
 pub use error::Error;
 pub use fts::bool_query::BoolQuery;
 pub use fts::es_bulk::{parse_es_bulk, EsBulkItem};
-pub use fts::hybrid::{hybrid_search, HybridHit};
+pub use fts::hybrid::{hybrid_search, HybridHit, HybridQuery};
 pub use fts::multi_field::MultiFieldQuery;
 pub use fts::{Analyzer, FtsConfig, FtsDoc, FtsEngine, SearchHit};
 pub use geo::{GeoEngine, GeoMember, GeoPoint, GeoUnit};
