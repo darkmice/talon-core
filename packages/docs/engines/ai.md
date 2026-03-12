@@ -531,6 +531,89 @@ pub enum IntentKind {
 ```
 Routes natural language queries to the appropriate engine.
 
+### Hybrid Memory (v2.1)
+
+Full-stack memory pipeline: auto-embed → dual-write (Vec+FTS) → hybrid recall with temporal, rerank, and graph support.
+
+::: tip v2.1 New
+These APIs build upon Auto-Embedding and LLM Provider Configuration. Ensure `configure_llm()` is called with at least an Embed Provider before using `add_memory` or `recall`.
+:::
+
+#### `add_memory`
+```rust
+pub fn add_memory(
+    &self, content: &str,
+    metadata: BTreeMap<String, String>,
+    ttl_secs: Option<u64>,
+    extract_facts: bool,
+) -> Result<u64, Error>
+```
+
+Automatic pipeline:
+1. Call Embedding API to generate vector (FNV hash cache)
+2. Write to vector index (semantic search)
+3. Write to FTS index (keyword search)
+4. Store metadata to KV
+5. [Optional] `extract_facts=true` → LLM extracts EDUs (Elementary Discourse Units), each EDU independently embedded + stored + graph-linked
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `content` | `&str` | Memory text content |
+| `metadata` | `BTreeMap<String, String>` | Custom key-value metadata |
+| `ttl_secs` | `Option<u64>` | Expiration in seconds, None = never expires |
+| `extract_facts` | `bool` | Extract structured events via LLM (requires Chat config) |
+
+#### `recall`
+```rust
+pub fn recall(
+    &self, query: &str, k: usize,
+    fts_weight: f64, vec_weight: f64,
+    temporal_boost: f64, rerank: bool,
+    rerank_top_k: Option<usize>,
+    graph_depth: usize,
+) -> Result<Vec<serde_json::Value>, Error>
+```
+
+**Full Pipeline (Phase 1-4):**
+
+```
+Query → Graph Expand → Hybrid(BM25 + Vector) → RRF Fusion → Temporal Decay → LLM Rerank → Top-K
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | `&str` | — | Search query text |
+| `k` | `usize` | 10 | Number of results to return |
+| `fts_weight` | `f64` | 0.4 | FTS (BM25) path weight |
+| `vec_weight` | `f64` | 0.6 | Vector (Cosine) path weight |
+| `temporal_boost` | `f64` | 0.0 | Temporal decay weight (recommended 0.3, 0=off) |
+| `rerank` | `bool` | false | Enable LLM Listwise Rerank (requires Chat config) |
+| `rerank_top_k` | `Option<usize>` | = k | Results to keep after rerank |
+| `graph_depth` | `usize` | 0 | Graph entity expansion hops (recommended 1-2, 0=off) |
+
+**Pipeline stages:**
+
+- **Graph Expand (Phase 4):** Extracts entities from query (Chinese + English), BFS N-hop expansion in knowledge graph
+- **Hybrid Search:** Parallel BM25 full-text retrieval + vector semantic search, RRF (Reciprocal Rank Fusion)
+- **Temporal Decay:** Time decay function — recent memories get higher weight
+- **LLM Rerank (Phase 3):** Listwise Rerank — LLM re-ranks candidates for precision
+
+**Response format:**
+```json
+[{
+  "entry": { "content": "...", "metadata": {...} },
+  "rrf_score": 0.85,
+  "bm25_score": 12.3,
+  "vector_dist": 0.15
+}]
+```
+
+#### `graph_memory_stats`
+```rust
+pub fn graph_memory_stats(&self) -> Result<(usize, usize), Error>
+```
+Returns `(vertex_count, edge_count)` in the memory knowledge graph.
+
 ## Accessing the AI Engine
 
 ```rust
@@ -556,3 +639,6 @@ let ai = db.ai_read()?;
 9. **Tool caching**: Cache expensive API calls with appropriate TTL
 10. **Tracing**: Record all LLM calls for debugging and cost tracking
 11. **Embedding cache**: Hash text content and cache embeddings to reduce API costs
+12. **Hybrid recall**: Use `recall()` with `fts_weight=0.4, vec_weight=0.6, temporal_boost=0.3` as starting point
+13. **Graph depth**: Set `graph_depth=1` for entity-aware recall; max 5 to prevent deep traversal
+14. **LLM Rerank**: Enable `rerank=true` for precision-critical scenarios; costs 1 LLM call per search

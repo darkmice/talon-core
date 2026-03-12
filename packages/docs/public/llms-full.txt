@@ -223,6 +223,22 @@ ai.cache_embedding(text_hash, embedding) / ai.get_cached_embedding(text_hash)
 
 // Intent
 ai.query_intent(&IntentQuery { text, context }) -> IntentResult { kind, confidence, suggested_action }
+
+// ── Hybrid Memory (v2.1) ──
+// LLM/Embedding Config
+ai.configure_llm(AiLlmConfig { chat: Option<LlmEndpoint>, embed: Option<EmbedEndpoint> })
+ai.get_llm_config() -> Option<AiLlmConfig>
+ai.clear_llm_config()
+
+// add_memory — auto embed + 双写(Vec+FTS) + 可选 EDU 提取
+ai.add_memory(content, metadata: BTreeMap, ttl_secs?, extract_facts: bool) -> u64
+// recall — Query → Graph Expand → Hybrid(BM25+Vec) → RRF → Temporal → Rerank → Top-K
+ai.recall(query, k, fts_weight, vec_weight, temporal_boost, rerank: bool, rerank_top_k?, graph_depth) -> Vec<Value>
+// auto-summarize
+ai.auto_summarize(session_id, SummarizeOptions { max_summary_tokens, purge_old, custom_prompt })
+ai.get_context_window_smart(session_id, max_tokens) -> Vec<ContextMessage>
+// graph memory
+ai.graph_memory_stats() -> (vertex_count, edge_count)
 ```
 
 ## Cross-Engine Fusion

@@ -15,6 +15,6 @@
 - [FTS Engine](https://docs.talon.dev/engines/full-text-search): BM25 + ES-compatible queries
 - [GEO Engine](https://docs.talon.dev/engines/geo): Geohash spatial indexing
 - [Graph Engine](https://docs.talon.dev/engines/graph): Property graph with BFS/DFS/PageRank
-- [AI Engine](https://docs.talon.dev/engines/ai): Session/Context/Memory/RAG/Agent/Trace
+- [AI Engine](https://docs.talon.dev/engines/ai): Session/Context/Memory/RAG/Agent/Trace + Hybrid Recall(BM25+Vec+Temporal+Rerank+Graph)
 - [Fusion Queries](https://docs.talon.dev/engines/fusion-queries): Cross-engine combinations
 - [Full API Reference](https://docs.talon.dev/llms-full.txt): Complete API signatures
