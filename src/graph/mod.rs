@@ -16,6 +16,8 @@ pub mod traversal;
 mod tests;
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 use crate::error::Error;
 use crate::storage::{Keyspace, Store};
@@ -25,9 +27,12 @@ pub use encoding::{Direction, Edge, Vertex};
 /// 图引擎实例。
 pub struct GraphEngine {
     store: Store,
+    /// 图句柄缓存：避免每次操作重复打开 6 个 Keyspace（与 Store::ks_cache 模式一致）。
+    handle_cache: RwLock<HashMap<String, GraphHandle>>,
 }
 
 /// 单个图的句柄（持有 6 个 Keyspace 引用）。
+#[derive(Clone)]
 struct GraphHandle {
     vertices: Keyspace,
     edges: Keyspace,
@@ -51,6 +56,7 @@ impl GraphEngine {
     pub fn open(store: &Store) -> Result<Self, Error> {
         Ok(GraphEngine {
             store: store.clone(),
+            handle_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -343,14 +349,25 @@ impl GraphEngine {
                 name
             )));
         }
-        Ok(GraphHandle {
+        // 快路径：读缓存
+        if let Ok(cache) = self.handle_cache.read() {
+            if let Some(h) = cache.get(name) {
+                return Ok(h.clone());
+            }
+        }
+        // 慢路径：创建并缓存
+        let handle = GraphHandle {
             vertices: self.store.open_keyspace(&format!("graph_{}_v", name))?,
             edges: self.store.open_keyspace(&format!("graph_{}_e", name))?,
             out_idx: self.store.open_keyspace(&format!("graph_{}_out", name))?,
             in_idx: self.store.open_keyspace(&format!("graph_{}_in", name))?,
             label_idx: self.store.open_keyspace(&format!("graph_{}_lbl", name))?,
             meta: self.store.open_keyspace(&format!("graph_{}_meta", name))?,
-        })
+        };
+        if let Ok(mut cache) = self.handle_cache.write() {
+            cache.insert(name.to_string(), handle.clone());
+        }
+        Ok(handle)
     }
 
     fn load_meta(&self, h: &GraphHandle) -> Result<GraphMeta, Error> {

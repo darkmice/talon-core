@@ -33,10 +33,25 @@ pub(super) fn deserialize_vec(raw: &[u8]) -> Result<Vec<f32>, Error> {
     if raw.len() % 4 != 0 {
         return Err(Error::Serialization("向量字节长非 4 的倍数".into()));
     }
-    Ok(raw
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-        .collect())
+    let count = raw.len() / 4;
+    // 零拷贝快速路径：little-endian 平台直接 memcpy 整个块
+    // Apple Silicon (aarch64) 和 x86_64 都是 little-endian
+    #[cfg(target_endian = "little")]
+    {
+        let mut vec = vec![0.0f32; count];
+        // Safety: f32 和 [u8;4] 在 LE 平台上布局相同
+        unsafe {
+            std::ptr::copy_nonoverlapping(raw.as_ptr(), vec.as_mut_ptr() as *mut u8, raw.len());
+        }
+        Ok(vec)
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        Ok(raw
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect())
+    }
 }
 
 // ── 小顶堆 / 大顶堆辅助 ─────────────────────────────────

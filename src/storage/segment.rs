@@ -55,10 +55,11 @@ impl Default for StorageConfig {
     }
 }
 
-/// LRU 缓存条目：存储任意字节数据 + 访问时间 + 估算大小。
+/// LRU 缓存条目：存储 Arc 引用计数数据 + 访问时间 + 估算大小。
+/// 使用 Arc 使得 get 只增加引用计数（O(1)），而非 clone 全部字节（O(N)）。
 struct CacheEntry {
-    /// 缓存的数据。
-    data: Vec<u8>,
+    /// 缓存的数据（Arc 共享，避免 clone）。
+    data: Arc<Vec<u8>>,
     /// 最后访问时间。
     last_access: Instant,
     /// 数据大小（字节），用于内存预算计算。
@@ -137,11 +138,12 @@ impl SegmentManager {
     }
 
     /// 获取缓存数据；命中时更新访问时间。
-    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+    /// 返回 Arc 引用——仅增加引用计数（O(1)），避免 clone 整个 Vec（对标 hnswlib 零拷贝缓存）。
+    pub fn get(&self, key: &str) -> Option<Arc<Vec<u8>>> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(entry) = inner.entries.get_mut(key) {
             entry.last_access = Instant::now();
-            let data = entry.data.clone();
+            let data = Arc::clone(&entry.data);
             inner.hits += 1;
             Some(data)
         } else {
@@ -174,7 +176,7 @@ impl SegmentManager {
         inner.entries.insert(
             key,
             CacheEntry {
-                data,
+                data: Arc::new(data),
                 last_access: Instant::now(),
                 size,
             },
@@ -308,7 +310,7 @@ mod tests {
         let sm = SegmentManager::with_defaults();
         sm.put("sql:users:seg0".into(), b"index_data".to_vec());
         assert!(sm.get("sql:users:seg0").is_some());
-        assert_eq!(sm.get("sql:users:seg0").unwrap(), b"index_data");
+        assert_eq!(&*sm.get("sql:users:seg0").unwrap(), b"index_data");
         sm.remove("sql:users:seg0");
         assert!(sm.get("sql:users:seg0").is_none());
     }

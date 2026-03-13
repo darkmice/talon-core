@@ -145,15 +145,36 @@ impl HnswNode {
             }
             let cnt = u16::from_le_bytes(raw[off..off + 2].try_into().unwrap()) as usize;
             off += 2;
-            let mut layer = Vec::with_capacity(cnt);
-            for _ in 0..cnt {
-                if off + 8 > raw.len() {
-                    break;
-                }
-                layer.push(u64::from_le_bytes(raw[off..off + 8].try_into().unwrap()));
-                off += 8;
+            let byte_len = cnt * 8;
+            if off + byte_len > raw.len() {
+                break;
             }
-            neighbors.push(layer);
+            // LE 平台零拷贝：一次 memcpy 整个邻居块
+            #[cfg(target_endian = "little")]
+            {
+                let mut layer = vec![0u64; cnt];
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        raw[off..].as_ptr(),
+                        layer.as_mut_ptr() as *mut u8,
+                        byte_len,
+                    );
+                }
+                neighbors.push(layer);
+            }
+            #[cfg(not(target_endian = "little"))]
+            {
+                let mut layer = Vec::with_capacity(cnt);
+                for _ in 0..cnt {
+                    layer.push(u64::from_le_bytes(raw[off..off + 8].try_into().unwrap()));
+                    off += 8;
+                }
+                neighbors.push(layer);
+            }
+            #[cfg(target_endian = "little")]
+            {
+                off += byte_len;
+            }
         }
         Ok(HnswNode {
             id,
@@ -267,7 +288,7 @@ impl VectorEngine {
     pub(super) fn load_quantized_vec(&self, id: u64) -> Result<Option<Vec<u8>>, Error> {
         let seg_key = seg_cache_key(&self.name, "q", id);
         if let Some(cached) = self.segments.get(&seg_key) {
-            return Ok(Some(cached));
+            return Ok(Some((*cached).clone()));
         }
         match self.keyspace.get(quant_key(id))? {
             Some(raw) => {
@@ -349,9 +370,10 @@ impl VectorEngine {
             let start_level = meta.max_level;
             for level in (new_level + 1..=start_level).rev() {
                 while let Some(node) = self.cached_load_node(&node_cache, current_id)? {
-                    let neighbors = node.neighbors.get(level).cloned().unwrap_or_default();
+                    let empty: Vec<u64> = Vec::new();
+                    let neighbors = node.neighbors.get(level).unwrap_or(&empty);
                     let mut improved = false;
-                    for &nb_id in &neighbors {
+                    for &nb_id in neighbors {
                         if !vec_cache.contains_key(&nb_id) {
                             match self.load_vec(nb_id)? {
                                 Some(v) => {
@@ -478,6 +500,7 @@ impl VectorEngine {
     }
 
     /// 在指定层做 beam search，返回最近的 ef 个 (id, distance)，按距离升序。
+    #[allow(dead_code)]
     pub(super) fn search_layer(
         &self,
         query: &[f32],
@@ -492,8 +515,8 @@ impl VectorEngine {
         })
     }
 
-    /// 带局部向量缓存的 beam search（插入热路径用，消除重复 load_vec）。
-    fn search_layer_cached(
+    /// 带局部向量缓存的 beam search（插入/搜索热路径用，消除重复 load_vec）。
+    pub(super) fn search_layer_cached(
         &self,
         query: &[f32],
         entry_id: u64,
@@ -518,6 +541,7 @@ impl VectorEngine {
     }
 
     /// 在指定层做量化 beam search。
+    #[allow(dead_code)]
     pub(super) fn search_layer_quantized(
         &self,
         query_q: &[u8],
@@ -530,6 +554,32 @@ impl VectorEngine {
         self.search_layer_generic(entry_id, ef, level, |id| {
             self.load_quantized_vec(id)
                 .map(|opt| opt.map(|v| qdist(query_q, &v, params)))
+        })
+    }
+
+    /// 带缓存的量化 beam search（搜索路径用，消除重复 load_quantized_vec）。
+    pub(super) fn search_layer_quantized_cached(
+        &self,
+        query_q: &[u8],
+        entry_id: u64,
+        ef: usize,
+        level: usize,
+        qdist: QuantDistFn,
+        params: &QuantizationParams,
+        quant_cache: &mut std::collections::HashMap<u64, Vec<u8>>,
+    ) -> Result<Vec<(u64, f32)>, Error> {
+        self.search_layer_generic(entry_id, ef, level, |id| {
+            if let Some(v) = quant_cache.get(&id) {
+                return Ok(Some(qdist(query_q, v, params)));
+            }
+            match self.load_quantized_vec(id)? {
+                Some(v) => {
+                    let d = qdist(query_q, &v, params);
+                    quant_cache.insert(id, v);
+                    Ok(Some(d))
+                }
+                None => Ok(None),
+            }
         })
     }
 
@@ -551,7 +601,8 @@ impl VectorEngine {
         };
         let mut candidates: BinaryHeap<MinItem> = BinaryHeap::new();
         let mut results: BinaryHeap<MaxItem> = BinaryHeap::new();
-        let mut visited: HashSet<u64> = HashSet::new();
+        // 预分配容量：beam search 通常访问 2-5x ef 个节点
+        let mut visited: HashSet<u64> = HashSet::with_capacity(ef * 4);
         candidates.push(MinItem(entry_dist, entry_id));
         results.push(MaxItem(entry_dist, entry_id));
         visited.insert(entry_id);
@@ -565,8 +616,10 @@ impl VectorEngine {
                 Some(n) => n,
                 None => continue,
             };
-            let neighbors = node.neighbors.get(level).cloned().unwrap_or_default();
-            for &nb_id in &neighbors {
+            // 借用邻居列表，避免 .cloned() 堆分配
+            let empty: Vec<u64> = Vec::new();
+            let neighbors = node.neighbors.get(level).unwrap_or(&empty);
+            for &nb_id in neighbors {
                 if !visited.insert(nb_id) {
                     continue;
                 }

@@ -310,6 +310,7 @@ pub fn execute(store: &Store, plan: Plan) -> Result<Vec<Vec<Value>>, Error> {
         Stmt::CreateView { .. } => Err(Error::SqlExec("CREATE VIEW 仅在 SqlEngine 中支持".into())),
         Stmt::DropView { .. } => Err(Error::SqlExec("DROP VIEW 仅在 SqlEngine 中支持".into())),
         Stmt::Comment { .. } => Err(Error::SqlExec("COMMENT ON 仅在 SqlEngine 中支持".into())),
+        Stmt::Analyze { .. } => Err(Error::SqlExec("ANALYZE 仅在 SqlEngine 中支持".into())),
     }
 }
 fn exec_insert(

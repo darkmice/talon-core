@@ -260,7 +260,7 @@ impl GraphEngine {
         Ok(ids)
     }
 
-    /// 带权最短路径（Dijkstra 变体，边权从属性解析）。
+    /// 带权最短路径（Dijkstra，BinaryHeap 实现，O((V+E) log V)）。
     ///
     /// `weight_key` 指定边属性中表示权重的 key（如 "weight"），缺失时默认权重 1.0。
     /// 返回 `(path, total_weight)`，不可达时返回 None。
@@ -282,17 +282,14 @@ impl GraphEngine {
         let mut dist: HashMap<u64, f64> = HashMap::new();
         let mut parent: HashMap<u64, u64> = HashMap::new();
         let mut visited: HashSet<u64> = HashSet::new();
-        // (distance, vertex_id) — 用 Vec 模拟优先队列（小数据集够用）
-        let mut frontier: Vec<(f64, u64, usize)> = Vec::new();
+        // BinaryHeap 最小堆：每次 pop 返回最小距离节点，O(log N)
+        let mut frontier: std::collections::BinaryHeap<DijkstraItem> =
+            std::collections::BinaryHeap::new();
 
         dist.insert(from, 0.0);
-        frontier.push((0.0, from, 0));
+        frontier.push(DijkstraItem(0.0, from, 0));
 
-        while !frontier.is_empty() {
-            // 找最小距离的节点（简单实现，适用于中等规模图）
-            frontier.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            let (d, current, depth) = frontier.pop().unwrap();
-
+        while let Some(DijkstraItem(d, current, depth)) = frontier.pop() {
             if !visited.insert(current) {
                 continue;
             }
@@ -330,10 +327,39 @@ impl GraphEngine {
                 if new_dist < old_dist {
                     dist.insert(edge.to, new_dist);
                     parent.insert(edge.to, current);
-                    frontier.push((new_dist, edge.to, depth + 1));
+                    frontier.push(DijkstraItem(new_dist, edge.to, depth + 1));
                 }
             }
         }
         Ok(None)
+    }
+}
+
+// ── Dijkstra BinaryHeap 辅助结构 ────────────────────────────
+// BinaryHeap 是大顶堆，通过反转 Ord 实现小顶堆（最小距离优先）。
+// 对标 Rust 标准库推荐的 Dijkstra 实现模式。
+
+/// Dijkstra 优先队列元素：(距离, 节点 ID, 深度)。
+#[derive(Clone, PartialEq)]
+struct DijkstraItem(f64, u64, usize);
+
+// Safety: f64 本身不满足 Eq（NaN != NaN），但 Dijkstra 算法中边权始终通过
+// `parse().ok().unwrap_or(1.0)` 获取，NaN 不可能出现。此外 Ord::cmp 中使用
+// `unwrap_or(Ordering::Equal)` 作为额外防护。BinaryHeap 要求 Ord 而 Ord 要求 Eq。
+impl Eq for DijkstraItem {}
+
+impl PartialOrd for DijkstraItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DijkstraItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // 反转比较：距离越小优先级越高（BinaryHeap 是大顶堆）
+        other
+            .0
+            .partial_cmp(&self.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }

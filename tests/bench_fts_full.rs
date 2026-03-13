@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
-use talon::{Analyzer, FtsConfig, FtsDoc, FtsEngine, Talon};
+use talon::{Analyzer, FtsConfig, FtsDoc, Talon};
 
 fn rss_kb() -> u64 {
     let pid = std::process::id();
@@ -190,7 +190,7 @@ fn fts_full() {
             lat.push(t.elapsed().as_nanos() as f64 / 1000.0);
         }
         let ops = s as f64 / t0.elapsed().as_secs_f64();
-        let (avg, _, p95, p99, _) = pct(&mut lat);
+        let (avg, _, p95, _p99, _) = pct(&mut lat);
         println!(
             "F3  | 单词搜索 LIMIT 10 (500 queries)    | {:>9.0} qps | Avg={} P95={}",
             ops,

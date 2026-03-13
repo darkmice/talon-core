@@ -7,11 +7,13 @@
 //! SQL 解析：兼容主流 SQL 写法的子集解析器。
 //!
 //! 支持：CREATE TABLE / DROP TABLE / DROP INDEX / INSERT / SELECT / UPDATE / DELETE / CREATE INDEX。
+//! M197：新增 lexer 模块，提供 Token 流切分和精确错误位置。
 
 mod ddl;
 mod geo_search;
 mod insert;
 mod join;
+pub(crate) mod lexer;
 mod select;
 mod types;
 mod update;
@@ -220,6 +222,21 @@ pub fn parse(sql: &str) -> Result<Stmt, crate::Error> {
     // M164：COMMENT ON TABLE/COLUMN
     if upper.starts_with("COMMENT ON ") {
         return parse_comment(sql);
+    }
+    // M197：ANALYZE table — 收集表级统计信息
+    if upper.starts_with("ANALYZE ") {
+        let rest = sql[7..].trim();
+        // 跳过可选的 TABLE 关键字
+        let rest = if rest.len() > 6 && rest[..6].eq_ignore_ascii_case("TABLE ") {
+            rest[5..].trim()
+        } else {
+            rest
+        };
+        let table = unquote_ident(rest.split_whitespace().next().unwrap_or(""));
+        if table.is_empty() {
+            return Err(crate::Error::SqlParse("ANALYZE missing table name".into()));
+        }
+        return Ok(Stmt::Analyze { table });
     }
 
     Err(crate::Error::SqlParse(

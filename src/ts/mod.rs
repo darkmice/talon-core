@@ -259,31 +259,71 @@ impl TsEngine {
     }
 
     /// 注册 tag 组合到倒排索引（幂等：已存在则跳过）。
+    /// 增加碰撞检测：若 hash 相同但 tags 不同，线性探测寻找空位（最多 16 次）。
+    /// 性能优化：先 serialize 一次 tags，后续通过 memcmp 比对 bytes，避免反序列化开销。
     fn register_tag_combo(
         &self,
         tags: &BTreeMap<String, String>,
         hash_bytes: &[u8],
     ) -> Result<(), Error> {
-        if self.tag_index_ks.contains_key(hash_bytes)? {
-            return Ok(());
+        // 预序列化：只做一次，后续用 bytes 直接比对（memcmp）
+        let tag_bytes = serde_json::to_vec(tags).map_err(|e| Error::TimeSeries(e.to_string()))?;
+        let mut probe_hash = u64::from_be_bytes(
+            hash_bytes.try_into().unwrap_or([0u8; 8]),
+        );
+        // 最多探测 16 次，防止极端碰撞链导致性能退化
+        for probe in 0..16u32 {
+            let key = if probe == 0 {
+                hash_bytes.to_vec()
+            } else {
+                probe_hash.to_be_bytes().to_vec()
+            };
+            if let Some(existing) = self.tag_index_ks.get(&key)? {
+                // 快速路径：bytes 直接比对，避免 JSON 反序列化
+                if &existing[..] == &tag_bytes[..] {
+                    return Ok(()); // 幂等：完全相同，跳过
+                }
+                // 慢路径：bytes 不等，可能是碰撞，继续探测
+                probe_hash = probe_hash.wrapping_add(1);
+                continue;
+            }
+            // 空位：写入（复用已序列化的 bytes）
+            return self.tag_index_ks.set(&key, &tag_bytes);
         }
-        let val = serde_json::to_vec(tags).map_err(|e| Error::TimeSeries(e.to_string()))?;
-        self.tag_index_ks.set(hash_bytes, &val)
+        Err(Error::TimeSeries(
+            "tag hash collision chain too long (>16 probes), consider rebuilding index".into(),
+        ))
     }
 
-    /// 批量注册 tag 组合（通过 WriteBatch，不单独 commit）。
+    /// 批量注册 tag 组合（通过 WriteBatch）。
+    /// 与 `register_tag_combo` 相同的碰撞检测 + memcmp 优化。
     fn register_tag_combo_batch(
         &self,
         batch: &mut crate::storage::Batch,
         tags: &BTreeMap<String, String>,
         hash_bytes: &[u8; 8],
     ) -> Result<(), Error> {
-        if self.tag_index_ks.contains_key(hash_bytes)? {
+        let tag_bytes = serde_json::to_vec(tags).map_err(|e| Error::TimeSeries(e.to_string()))?;
+        let mut probe_hash = u64::from_be_bytes(*hash_bytes);
+        for probe in 0..16u32 {
+            let key = if probe == 0 {
+                hash_bytes.to_vec()
+            } else {
+                probe_hash.to_be_bytes().to_vec()
+            };
+            if let Some(existing) = self.tag_index_ks.get(&key)? {
+                if &existing[..] == &tag_bytes[..] {
+                    return Ok(());
+                }
+                probe_hash = probe_hash.wrapping_add(1);
+                continue;
+            }
+            batch.insert(&self.tag_index_ks, key, tag_bytes)?;
             return Ok(());
         }
-        let val = serde_json::to_vec(tags).map_err(|e| Error::TimeSeries(e.to_string()))?;
-        batch.insert(&self.tag_index_ks, hash_bytes.to_vec(), val)?;
-        Ok(())
+        Err(Error::TimeSeries(
+            "tag hash collision chain too long (>16 probes) in batch".into(),
+        ))
     }
 
     /// 范围查询。M94：tag+time key 范围剪枝。M104：ASC+LIMIT 提前终止。

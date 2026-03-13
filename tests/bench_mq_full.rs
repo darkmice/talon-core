@@ -193,7 +193,7 @@ fn mq_full() {
                 let group = format!("g{}", g);
                 let consumer = format!("c{}", g);
                 let mq = db2.mq().unwrap();
-                let mut total = 0usize;
+                let mut _total = 0usize;
                 loop {
                     let msgs = mq.poll("multi", &group, &consumer, 100).unwrap();
                     if msgs.is_empty() {
@@ -202,7 +202,7 @@ fn mq_full() {
                     for msg in &msgs {
                         mq.ack("multi", &group, &consumer, msg.id).unwrap();
                     }
-                    total += msgs.len();
+                    _total += msgs.len();
                 }
             }
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -245,7 +245,7 @@ fn mq_full() {
         let t0 = Instant::now();
         {
             let mq = db2.mq().unwrap();
-            let mut total = 0u64;
+            let mut _total = 0u64;
             loop {
                 let msgs = mq.poll("sz", "g", "c", 100).unwrap();
                 if msgs.is_empty() {
@@ -254,7 +254,7 @@ fn mq_full() {
                 for msg in &msgs {
                     mq.ack("sz", "g", "c", msg.id).unwrap();
                 }
-                total += msgs.len() as u64;
+                _total += msgs.len() as u64;
             }
         }
         let rops = cnt as f64 / t0.elapsed().as_secs_f64();

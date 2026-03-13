@@ -636,6 +636,7 @@ impl SqlEngine {
                 column,
                 text,
             } => self.exec_comment(&table, column.as_deref(), &text),
+            Stmt::Analyze { table } => self.exec_analyze(&table),
         }
     }
 

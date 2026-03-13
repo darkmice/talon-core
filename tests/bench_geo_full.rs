@@ -116,7 +116,6 @@ fn geo_full() {
         let mut i = 10_000u64;
         while i < n {
             let end = (i + 1000).min(n);
-            let batch: Vec<(&str, f64, f64)> = Vec::new();
             // 需要 owned strings，改用循环
             let members: Vec<(String, f64, f64)> = (i..end)
                 .map(|j| {

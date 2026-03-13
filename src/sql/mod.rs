@@ -16,6 +16,7 @@ mod engine;
 mod engine_agg;
 mod engine_agg_acc;
 mod engine_agg_stats;
+mod engine_analyze;
 mod engine_batch;
 mod engine_cte;
 mod engine_ddl;

@@ -208,6 +208,10 @@ pub enum Stmt {
         /// 注释文本。
         text: String,
     },
+    /// M197：ANALYZE table — 收集表级统计信息（行数、NDV、min/max）。
+    Analyze {
+        table: String,
+    },
 }
 /// SQL 嵌入式向量搜索表达式。
 /// 对应 `vec_distance(col, [...]) AS alias` 或 `vec_cosine` / `vec_l2` / `vec_dot`。

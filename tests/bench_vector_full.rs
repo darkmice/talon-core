@@ -90,17 +90,6 @@ fn rvec(dim: usize, seed: u64) -> Vec<f32> {
     v
 }
 
-fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    dot / (na.sqrt() * nb.sqrt() + 1e-10)
-}
 
 #[test]
 fn vector_full() {

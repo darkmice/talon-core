@@ -188,8 +188,35 @@ impl VectorEngine {
         Ok(())
     }
 
-    /// 批量插入向量。
+    /// 批量插入向量（优化版：向量预写入 + 缓存预热 + 逐条图构建）。
+    ///
+    /// 优化策略（参考 hnswlib 批量建图）：
+    /// 1. 先批量写入所有向量数据（单一 WriteBatch，减少磁盘刷写）
+    /// 2. 向量数据同时写入 SegmentManager 缓存，后续图构建时 load_vec 命中内存
+    /// 3. 再逐条调用 insert 构建 HNSW 图索引（图构建天然串行）
+    ///
+    /// 对比旧实现（逐条 insert 各自 WriteBatch），向量 I/O 合并为一次 commit。
     pub fn insert_batch(&self, items: &[(u64, &[f32])]) -> Result<(), Error> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        // 阶段 1：批量预写入向量数据 + 缓存预热
+        {
+            let mut batch = self.store.batch();
+            for (id, vec) in items {
+                let raw = distance::serialize_vec(vec);
+                batch.insert(&self.keyspace, hnsw::vec_key(*id), raw.clone())?;
+                // 预热 SegmentManager 缓存：后续 load_vec 直接命中内存
+                let seg_key = format!("vec:{}:v:{}", self.name, id);
+                self.segments.put(seg_key, raw);
+            }
+            batch.commit()?;
+        }
+
+        // 阶段 2：逐条构建 HNSW 图索引
+        // insert 内部会检测向量已存在（load_vec 命中缓存）并跳过重复写入，
+        // 仅执行图结构构建（hnsw_insert）。
         for (id, vec) in items {
             self.insert(*id, vec)?;
         }
@@ -258,6 +285,7 @@ impl VectorEngine {
     }
 
     /// 原始 f32 向量搜索路径。
+    /// 优化：使用 vec_cache 贯穿整个搜索流程，每个向量只反序列化一次。
     fn search_raw(
         &self,
         query: &[f32],
@@ -267,24 +295,34 @@ impl VectorEngine {
         entry_id: u64,
     ) -> Result<Vec<(u64, f32)>, Error> {
         let distance = dist_fn(metric)?;
+        // 向量缓存：搜索期间每个向量只 load + deserialize 一次
+        let mut vec_cache: std::collections::HashMap<u64, Vec<f32>> =
+            std::collections::HashMap::with_capacity(256);
         let entry_vec = match self.load_vec(entry_id)? {
             Some(v) => v,
             None => return Ok(vec![]),
         };
+        vec_cache.insert(entry_id, entry_vec);
         let mut current_id = entry_id;
-        let mut current_dist = distance(query, &entry_vec);
+        let mut current_dist = distance(query, &vec_cache[&entry_id]);
+        // 贪心下降：高层 → new_level+1，使用缓存
         for level in (1..=meta.max_level).rev() {
             while let Some(node) = self.load_node(current_id)? {
-                let neighbors = node.neighbors.get(level).cloned().unwrap_or_default();
+                let empty: Vec<u64> = Vec::new();
+                let neighbors = node.neighbors.get(level).unwrap_or(&empty);
                 let mut improved = false;
-                for &nb_id in &neighbors {
-                    if let Some(nb_vec) = self.load_vec(nb_id)? {
-                        let d = distance(query, &nb_vec);
-                        if d < current_dist {
-                            current_dist = d;
-                            current_id = nb_id;
-                            improved = true;
+                for &nb_id in neighbors {
+                    if !vec_cache.contains_key(&nb_id) {
+                        match self.load_vec(nb_id)? {
+                            Some(v) => { vec_cache.insert(nb_id, v); }
+                            None => continue,
                         }
+                    }
+                    let d = distance(query, &vec_cache[&nb_id]);
+                    if d < current_dist {
+                        current_dist = d;
+                        current_id = nb_id;
+                        improved = true;
                     }
                 }
                 if !improved {
@@ -292,8 +330,9 @@ impl VectorEngine {
                 }
             }
         }
+        // beam search：使用带缓存版本
         let ef = meta.ef_search.max(k);
-        let results = self.search_layer(query, current_id, ef, 0, distance)?;
+        let results = self.search_layer_cached(query, current_id, ef, 0, distance, &mut vec_cache)?;
         let mut filtered: Vec<(u64, f32)> = results
             .into_iter()
             .filter(|(id, _)| {
@@ -310,6 +349,7 @@ impl VectorEngine {
     }
 
     /// 量化搜索路径：使用 u8 量化向量计算距离，减少内存和计算开销。
+    /// 优化：使用 quant_cache 贯穿整个搜索流程。
     fn search_quantized(
         &self,
         query: &[f32],
@@ -321,24 +361,32 @@ impl VectorEngine {
     ) -> Result<Vec<(u64, f32)>, Error> {
         let qdist = quant_dist_fn(metric)?;
         let query_q = quantize_vec(query, params);
+        let mut quant_cache: std::collections::HashMap<u64, Vec<u8>> =
+            std::collections::HashMap::with_capacity(256);
         let entry_q = match self.load_quantized_vec(entry_id)? {
             Some(v) => v,
             None => return Ok(vec![]),
         };
+        quant_cache.insert(entry_id, entry_q);
         let mut current_id = entry_id;
-        let mut current_dist = qdist(&query_q, &entry_q, params);
+        let mut current_dist = qdist(&query_q, &quant_cache[&entry_id], params);
         for level in (1..=meta.max_level).rev() {
             while let Some(node) = self.load_node(current_id)? {
-                let neighbors = node.neighbors.get(level).cloned().unwrap_or_default();
+                let empty: Vec<u64> = Vec::new();
+                let neighbors = node.neighbors.get(level).unwrap_or(&empty);
                 let mut improved = false;
-                for &nb_id in &neighbors {
-                    if let Some(nb_q) = self.load_quantized_vec(nb_id)? {
-                        let d = qdist(&query_q, &nb_q, params);
-                        if d < current_dist {
-                            current_dist = d;
-                            current_id = nb_id;
-                            improved = true;
+                for &nb_id in neighbors {
+                    if !quant_cache.contains_key(&nb_id) {
+                        match self.load_quantized_vec(nb_id)? {
+                            Some(v) => { quant_cache.insert(nb_id, v); }
+                            None => continue,
                         }
+                    }
+                    let d = qdist(&query_q, &quant_cache[&nb_id], params);
+                    if d < current_dist {
+                        current_dist = d;
+                        current_id = nb_id;
+                        improved = true;
                     }
                 }
                 if !improved {
@@ -347,7 +395,10 @@ impl VectorEngine {
             }
         }
         let ef = meta.ef_search.max(k);
-        let results = self.search_layer_quantized(&query_q, current_id, ef, 0, qdist, params)?;
+        // 使用带缓存的量化 beam search
+        let results = self.search_layer_quantized_cached(
+            &query_q, current_id, ef, 0, qdist, params, &mut quant_cache,
+        )?;
         let mut filtered: Vec<(u64, f32)> = results
             .into_iter()
             .filter(|(id, _)| {

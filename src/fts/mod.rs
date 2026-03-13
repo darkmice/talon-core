@@ -17,9 +17,11 @@ pub mod bool_query;
 pub mod es_bulk;
 mod fuzzy;
 pub mod hybrid;
+pub(crate) mod hmm;
 pub(crate) mod jieba;
 pub mod multi_field;
 pub mod phrase;
+pub(crate) mod posting;
 pub mod range;
 pub mod regexp;
 pub mod term;
@@ -91,9 +93,10 @@ pub struct FtsEngine {
 /// 位置列表最大长度（防止高频词在长文档中占用过多空间）。
 pub(super) const MAX_POSITIONS: usize = 256;
 
-/// 倒排索引 entry value: tf(u32) + doc_len(u32) + pos_count(u32) + positions(u32×N)。
+/// 倒排索引 entry v1 编码: tf(u32) + doc_len(u32) + pos_count(u32) + positions(u32×N)。
 ///
-/// 向后兼容：旧格式（8 字节）无位置信息，`decode_inv_entry` 返回空位置列表。
+/// v2 已切换为 VInt+Delta（见 posting.rs），此函数保留供测试基准对照。
+#[allow(dead_code)]
 fn encode_inv_entry(tf: u32, doc_len: u32, positions: &[u32]) -> Vec<u8> {
     let pos_count = positions.len().min(MAX_POSITIONS);
     let mut buf = Vec::with_capacity(12 + pos_count * 4);
@@ -108,8 +111,41 @@ fn encode_inv_entry(tf: u32, doc_len: u32, positions: &[u32]) -> Vec<u8> {
 
 /// 解码倒排 entry：返回 (tf, doc_len, positions)。
 ///
-/// 向后兼容：8 字节旧格式返回空位置列表。
+/// 自动检测 v1（固定宽度 u32 LE）或 v2（VInt+Delta）格式。
+/// v2 格式以 magic byte 0xFE 开头。
 pub(super) fn decode_inv_entry(data: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
+    posting::decode_inv_entry_auto(data)
+}
+
+/// 轻量解码：只返回 (tf, doc_len)，跳过 positions，零堆分配。
+/// 搜索 BM25 评分只需 tf + dl，不需要 positions。
+/// 对标 Tantivy BlockSegmentPostings: tf-only iterator。
+#[inline]
+pub(super) fn decode_inv_tf_dl(data: &[u8]) -> Option<(u32, u32)> {
+    if data.is_empty() {
+        return None;
+    }
+    if data[0] == 0xFE {
+        // v2 format: [magic] [tf: vint] [doc_len: vint] ...
+        let mut pos = 1;
+        let tf = posting::decode_vint(data, &mut pos)?;
+        let dl = posting::decode_vint(data, &mut pos)?;
+        Some((tf, dl))
+    } else {
+        // v1 format: [tf: u32 LE] [dl: u32 LE] ...
+        if data.len() < 8 {
+            return None;
+        }
+        let tf = u32::from_le_bytes(data[0..4].try_into().ok()?);
+        let dl = u32::from_le_bytes(data[4..8].try_into().ok()?);
+        Some((tf, dl))
+    }
+}
+
+/// v1 格式解码（固定宽度 u32 LE），供 posting 模块向后兼容调用。
+///
+/// 向后兼容：8 字节旧格式返回空位置列表。
+pub(super) fn decode_inv_entry_v1(data: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
     if data.len() < 8 {
         return None;
     }
@@ -255,7 +291,8 @@ impl FtsEngine {
         // 写入倒排索引 + 更新 df + term 注册表
         for (term, (tf, positions)) in &tf_map {
             let ik = inv_key(term, &doc.doc_id);
-            batch.insert(&inv_ks, ik, encode_inv_entry(*tf, doc_len, positions))?;
+            // v2 编码：VInt + Delta 压缩，平均节省 50-75% 存储空间
+            batch.insert(&inv_ks, ik, posting::encode_inv_entry_v2(*tf, doc_len, positions))?;
             // 增量更新 df（注意：旧文档的 df 已在 remove_doc_into_batch 中递减）
             let dk = df_key(term);
             let old_df = stat_ks
@@ -429,7 +466,9 @@ impl FtsEngine {
         // 逐 term 扫描倒排索引，按 doc_id 聚合分数（零堆分配：[u8;8] 栈数组）
         // M202：跳过超高频词（df > 80% 文档数），IDF 接近 0 对排序无贡献
         let df_skip_threshold = (doc_count as f64 * 0.8) as u64;
-        let mut scores: HashMap<[u8; 8], f64> = HashMap::new();
+        // 预分配容量：典型场景每个 term 命中 doc_count/10 个文档
+        let est_cap = (doc_count as usize / 10).max(256).min(100_000);
+        let mut scores: HashMap<[u8; 8], f64> = HashMap::with_capacity(est_cap);
         for term in &tokens {
             let dk = df_key(term);
             let df = stat_ks
@@ -450,7 +489,8 @@ impl FtsEngine {
                 if key.len() != 16 {
                     return true;
                 }
-                if let Some((tf, dl, _positions)) = decode_inv_entry(val) {
+                // 轻量解码：只提取 tf + dl，跳过 positions（零堆分配）
+                if let Some((tf, dl)) = decode_inv_tf_dl(val) {
                     let mut doc_hash = [0u8; 8];
                     doc_hash.copy_from_slice(&key[8..16]);
                     let s = bm25::term_score(tf, dl, avgdl, idf_val);
@@ -459,10 +499,35 @@ impl FtsEngine {
                 true
             })?;
         }
-        // 按分数排序取 Top-N
-        let mut scored: Vec<([u8; 8], f64)> = scores.into_iter().collect();
+        // Top-K 选取：用 BinaryHeap 而非全量排序
+        // 当匹配文档数远大于 limit 时，BinaryHeap O(N log K) 远优于 sort O(N log N)
+        use std::collections::BinaryHeap;
+        use std::cmp::Ordering;
+        #[derive(PartialEq)]
+        struct ScoreItem([u8; 8], f64);
+        impl Eq for ScoreItem {}
+        impl PartialOrd for ScoreItem {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+        }
+        impl Ord for ScoreItem {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // 小顶堆：分数低的在堆顶，用于维护 Top-K 高分
+                self.1.partial_cmp(&other.1).unwrap_or(Ordering::Equal)
+            }
+        }
+        let mut heap: BinaryHeap<std::cmp::Reverse<ScoreItem>> = BinaryHeap::with_capacity(limit + 1);
+        for (doc_hash, score) in scores {
+            if heap.len() < limit {
+                heap.push(std::cmp::Reverse(ScoreItem(doc_hash, score)));
+            } else if let Some(min) = heap.peek() {
+                if score > min.0 .1 {
+                    heap.pop();
+                    heap.push(std::cmp::Reverse(ScoreItem(doc_hash, score)));
+                }
+            }
+        }
+        let mut scored: Vec<([u8; 8], f64)> = heap.into_iter().map(|std::cmp::Reverse(ScoreItem(h, s))| (h, s)).collect();
         scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
         // 根据 doc_id_hash 反查文档（O(k) 直接查找）
         let mut results = Vec::with_capacity(scored.len());
         let mut hash_key_buf = [0u8; 10];

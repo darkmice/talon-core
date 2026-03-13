@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
-use talon::{AggFunc, DataPoint, FillStrategy, Talon, TsAggQuery, TsQuery, TsSchema};
+use talon::{AggFunc, DataPoint, Talon, TsAggQuery, TsQuery, TsSchema};
 
 fn rss_kb() -> u64 {
     let pid = std::process::id();

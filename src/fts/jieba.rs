@@ -4,10 +4,10 @@
  * Licensed under the Talon Community Dual License Agreement.
  * See the LICENSE file in the project root for full license information.
  */
-//! 中文分词器：基于最大概率路径（DAG + 动态规划），对标 jieba。
+//! 中文分词器：基于最大概率路径（DAG + 动态规划）+ HMM 新词发现，对标 jieba。
 //!
 //! 纯 Rust 实现，零外部依赖。内嵌高频词典，支持自定义词典加载。
-//! 算法：构建 DAG → 动态规划求最大概率路径 → 未登录词单字回退。
+//! 算法：构建 DAG → 动态规划求最大概率路径 → 未登录词 HMM Viterbi 切分。
 
 use std::collections::HashMap;
 
@@ -145,14 +145,29 @@ impl JiebaDict {
             route[i] = best;
         }
 
-        // 沿最优路径输出分词结果
+        // 沿最优路径输出分词结果，连续单字交给 HMM 重新切分
         let mut result = Vec::new();
+        let mut single_chars: Vec<char> = Vec::new(); // 缓冲连续单字
         let mut i = 0;
         while i < n {
             let j = route[i].1;
             let word: String = chars[i..j].iter().collect();
-            result.push(word);
+            if j - i == 1 {
+                // 单字：缓冲，等知道是否有更多连续单字
+                single_chars.push(chars[i]);
+            } else {
+                // 多字词：先处理缓冲的单字
+                if !single_chars.is_empty() {
+                    result.extend(super::hmm::viterbi_cut(&single_chars));
+                    single_chars.clear();
+                }
+                result.push(word);
+            }
             i = j;
+        }
+        // 处理末尾缓冲的单字
+        if !single_chars.is_empty() {
+            result.extend(super::hmm::viterbi_cut(&single_chars));
         }
         result
     }
